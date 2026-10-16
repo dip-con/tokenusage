@@ -16,6 +16,7 @@ Token Usage는 macOS 메뉴 막대에서 AI 서비스의 사용량과 한도, �
 
 * **Claude**: 계정별 5시간 한도, 주간 한도, Fable 주간 한도. 주간 한도가 없는 Team 플랜은 그 자리에 Fable 사용량과 초기화 시각을 표시
 * **Codex**: 주간 한도, 계정별 남은 추가 크레딧과 프로필별 상태
+* **Grok**: 계정별 SuperGrok 구독 한도(주간 또는 월간 크레딧 사용률)와 초기화 시각, 플랜 이름
 * **OpenRouter**: 사용량, 크레딧 또는 한도, 잔액, 티어와 요청 제한
 
 ## 요구 사항
@@ -23,6 +24,7 @@ Token Usage는 macOS 메뉴 막대에서 AI 서비스의 사용량과 한도, �
 * macOS 14 이상
 * Claude를 쓰려면 Claude Code에 로그인되어 있어야 합니다.
 * Codex를 쓰려면 `codex` CLI가 설치되어 있고 로그인되어 있어야 합니다. 앱은 CLI의 app server를 통해 조회합니다.
+* Grok을 쓰려면 xAI의 공식 `grok` CLI(Grok Build)가 설치되어 있어야 합니다. 로그인은 앱 안에서 웹으로 진행하므로 API 키는 필요 없습니다.
 * OpenRouter를 쓰려면 API 키를 `OPENROUTER_API_KEY` 환경 변수에 넣거나 `~/.config/openrouter/key` 파일에 저장해야 합니다.
 
 로컬 배포 패키지는 Apple Silicon과 Intel을 포함하는 Universal 빌드입니다. Apple Silicon에서 실행을 확인했으며, Intel 하드웨어에서의 실행은 아직 검증하지 않았습니다.
@@ -82,6 +84,17 @@ Codex의 `account/rateLimits/read` 응답에 `rateLimitResetCredits.availableCou
 
 Claude는 사용량 조회 요청에 `cedar_ember=1`을 붙여 받은 한도 초기화 쿠폰(`/limit-reset`)의 남은 개수와 가장 빠른 사용 기한을 계정 행에 표시합니다. 서버가 Claude Code CLI에만 쿠폰을 알려 주므로 이 요청은 Claude Code의 User-Agent를 보냅니다. 비공개 필드라 형식이 바뀌면 쿠폰만 숨기고 사용량은 그대로 표시하며, 남은 쿠폰이 0개면 배지를 표시하지 않습니다.
 
+## Grok 계정과 비공식 엔드포인트
+
+Grok 계정은 Claude·Codex와 같은 방식으로 붙입니다. 팝오버의 Grok **계정 관리 → 새 로그인**을 누르면 앱이 임시 디렉터리를 `GROK_HOME`으로 지정해 `grok login --device-auth`를 실행하고, 출력된 x.ai 로그인 페이지(`accounts.x.ai`)를 브라우저로 엽니다. 브라우저에서 x.ai 계정으로 로그인하고 미리 채워진 코드를 승인하면 계정이 저장됩니다. 이 과정은 지금 `grok` CLI에 로그인된 계정(`~/.grok/auth.json`)을 건드리지 않습니다. **현재 계정 저장**은 `grok` CLI에 로그인된 계정을 그대로 저장하며, 처음 실행할 때 저장된 계정이 없으면 `grok1`이라는 이름으로 자동 저장합니다.
+
+* 자격 증명: 계정마다 `grok` CLI의 `auth.json` 내용 전체를 macOS 키체인(`local.tokenusage.grok-profiles`)에만 저장합니다. 계정 이름, 이메일, 사용자 ID, 플랜 이름 같은 비밀이 아닌 정보만 `UserDefaults`에 둡니다. 토큰은 화면, 로그, 휴대폰 페이지에 표시하지 않습니다.
+* 토큰 갱신: `grok` CLI가 로그인한 계정의 토큰은 CLI가 직접 갱신하므로 앱은 갱신하지 않습니다. 나머지 저장된 계정은 만료가 가까워지면 앱이 `https://auth.x.ai/oauth2/token`에 표준 OAuth refresh_token 요청을 보내 갱신합니다.
+* 계정 전환: 목록에서 계정을 누르면 `~/.grok/auth.json`을 그 계정으로 원자적으로 교체합니다. 이미 실행 중인 `grok` 세션은 읽어 둔 계정을 계속 쓰고, 새로 시작한 세션부터 바뀐 계정을 씁니다. 저장하지 않은 계정이 로그인되어 있으면 덮어써서 잃지 않도록 전환을 거부하니 먼저 **현재 계정 저장**을 해 주세요.
+* 엔터프라이즈 OIDC(자체 IdP) 로그인과 `XAI_API_KEY` 방식은 지원하지 않습니다. 구독 한도는 x.ai 계정 로그인에서만 조회됩니다.
+
+**비공식 엔드포인트 주의.** xAI는 구독(SuperGrok) 사용량을 조회하는 공개 API를 제공하지 않습니다. 앱은 공식 `grok` CLI가 내부적으로 쓰는 백엔드 `https://cli-chat-proxy.grok.com/v1/billing?format=credits`(사용률, 기간)와 `/v1/settings`(플랜 이름)에 CLI와 같은 헤더로 GET 요청을 보냅니다. 문서화되지 않은 경로라 xAI가 예고 없이 바꾸거나 막을 수 있고, 그러면 Grok 행만 **조회 실패**로 표시되고 다른 서비스는 영향받지 않습니다. 응답에 사용률 값이 없고 현재 기간만 있으면 grok.com 웹 클라이언트와 같이 0% 사용으로 표시합니다(protobuf가 0 값을 생략하기 때문). 이 해석도 xAI 쪽 변경으로 틀릴 수 있습니다. API 키 요금(`console.x.ai`)이나 grok.com 채팅 횟수 제한은 이 조회에 포함되지 않습니다.
+
 ## 휴대폰에서 보기
 
 Mac이 Tailscale에 연결되어 있으면 앱이 그 Tailscale 주소(100.64.0.0/10)의 8787 포트에서만 읽기 전용 페이지를 엽니다. 팝오버의 **휴대폰 링크 복사**로 받은 링크를 같은 tailnet의 휴대폰에서 열면 됩니다.
@@ -94,7 +107,7 @@ Mac이 Tailscale에 연결되어 있으면 앱이 그 Tailscale 주소(100.64.0.
 
 ## 개인정보와 네트워크 요약
 
-앱은 계정 인증 정보와 사용량을 로컬에서 읽고, 위에 적은 각 제공자의 엔드포인트 또는 로컬 Codex CLI에만 조회를 보냅니다. 휴대폰 보기를 위해 Tailscale 주소에서만 요청을 받으며, 접근 키 없이 들어온 요청에는 사용량을 주지 않습니다. 이 저장소의 코드만으로 제공자의 보존 기간, 네트워크 로그, 제3자 처리 여부까지 보장할 수는 없습니다.
+앱은 계정 인증 정보와 사용량을 로컬에서 읽고, 위에 적은 각 제공자의 엔드포인트(Grok은 `cli-chat-proxy.grok.com`과 `auth.x.ai`) 또는 로컬 Codex·grok CLI에만 조회를 보냅니다. 휴대폰 보기를 위해 Tailscale 주소에서만 요청을 받으며, 접근 키 없이 들어온 요청에는 사용량을 주지 않습니다. 이 저장소의 코드만으로 제공자의 보존 기간, 네트워크 로그, 제3자 처리 여부까지 보장할 수는 없습니다.
 
 ## 라이선스
 

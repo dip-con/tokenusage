@@ -23,6 +23,16 @@ public struct CodexProfileUsage: Equatable, Sendable {
     }
 }
 
+public struct GrokProfileUsage: Equatable, Sendable {
+    public let profileID: String
+    public let state: UsageState
+
+    public init(profileID: String, state: UsageState) {
+        self.profileID = profileID
+        self.state = state
+    }
+}
+
 public enum OpenRouterUsageState: Equatable, Sendable {
     case fresh(OpenRouterUsageSnapshot)
     case stale(lastGood: OpenRouterUsageSnapshot, message: String)
@@ -56,6 +66,9 @@ public struct AppUsageSnapshot: Equatable, Sendable {
     public let claudeUsage: [ClaudeProfileUsage]
     public let claudeProfiles: [ClaudeProfileMetadata]
     public let activeClaudeProfileID: String?
+    public let grokUsage: [GrokProfileUsage]
+    public let grokProfiles: [GrokProfileMetadata]
+    public let activeGrokProfileID: String?
 
     public init(
         claude: UsageState,
@@ -68,7 +81,10 @@ public struct AppUsageSnapshot: Equatable, Sendable {
         removedCodexProfileNames: [String] = [],
         claudeUsage: [ClaudeProfileUsage] = [],
         claudeProfiles: [ClaudeProfileMetadata] = [],
-        activeClaudeProfileID: String? = nil
+        activeClaudeProfileID: String? = nil,
+        grokUsage: [GrokProfileUsage] = [],
+        grokProfiles: [GrokProfileMetadata] = [],
+        activeGrokProfileID: String? = nil
     ) {
         self.claude = claude
         self.codexUsage = codexUsage
@@ -79,6 +95,9 @@ public struct AppUsageSnapshot: Equatable, Sendable {
         self.claudeUsage = claudeUsage
         self.claudeProfiles = claudeProfiles
         self.activeClaudeProfileID = activeClaudeProfileID
+        self.grokUsage = grokUsage
+        self.grokProfiles = grokProfiles
+        self.activeGrokProfileID = activeGrokProfileID
     }
 }
 
@@ -148,6 +167,33 @@ public struct UnavailableClaudeProfileActions: ClaudeProfileActionHandling {
 
     public func deleteClaudeProfile(id: String) async throws -> AppUsageSnapshot {
         throw ClaudeProfileManagerError.storageFailed
+    }
+}
+
+public protocol GrokProfileActionHandling: Sendable {
+    func selectGrokProfile(id: String) async throws -> AppUsageSnapshot
+    func saveCurrentGrokProfile(named name: String) async throws -> AppUsageSnapshot
+    func addGrokAccount(named name: String) async throws -> AppUsageSnapshot
+    func deleteGrokProfile(id: String) async throws -> AppUsageSnapshot
+}
+
+public struct UnavailableGrokProfileActions: GrokProfileActionHandling {
+    public init() {}
+
+    public func selectGrokProfile(id: String) async throws -> AppUsageSnapshot {
+        throw GrokProfileManagerError.storageFailed
+    }
+
+    public func saveCurrentGrokProfile(named name: String) async throws -> AppUsageSnapshot {
+        throw GrokProfileManagerError.storageFailed
+    }
+
+    public func addGrokAccount(named name: String) async throws -> AppUsageSnapshot {
+        throw GrokProfileManagerError.loginUnavailable
+    }
+
+    public func deleteGrokProfile(id: String) async throws -> AppUsageSnapshot {
+        throw GrokProfileManagerError.storageFailed
     }
 }
 
@@ -326,6 +372,30 @@ public struct ClaudeProfileQuotaPresentation: Identifiable, Equatable, Sendable 
     }
 }
 
+public struct GrokProfileQuotaPresentation: Identifiable, Equatable, Sendable {
+    public var id: String { profileID }
+    public let profileID: String
+    public let name: String
+    public let emailAddress: String?
+    public let subscriptionTier: String?
+    public let quota: QuotaWindowPresentation
+    public let freshnessText: String
+    public let isActive: Bool
+
+    public var accessibilityIdentifier: String {
+        "grok-profile-quota-\(profileID)"
+    }
+
+    public var accessibilityLabel: String {
+        let active = isActive ? ", 사용 중" : ""
+        let email = emailAddress.map { ", \($0)" } ?? ""
+        let tier = subscriptionTier.map { ", \($0)" } ?? ""
+        let reset = quota.reset == "--" ? "" : " \(quota.reset)"
+        return "\(name)\(email)\(tier)\(active), \(freshnessText), "
+            + "\(quota.window) \(quota.remaining)\(reset)"
+    }
+}
+
 /// A Claude limit-reset credit the account still holds, with the deadline for using it.
 public struct ResetCouponPresentation: Equatable, Sendable {
     public let countText: String
@@ -361,6 +431,10 @@ public final class AppViewModel: ObservableObject {
     @Published public private(set) var claudeProfiles: [ClaudeProfileMetadata] = []
     @Published public private(set) var selectedClaudeProfileID: String?
     @Published public private(set) var activeClaudeProfileName = "활성 계정 없음"
+    @Published public private(set) var grokQuotaRows: [GrokProfileQuotaPresentation] = []
+    @Published public private(set) var grokProfiles: [GrokProfileMetadata] = []
+    @Published public private(set) var selectedGrokProfileID: String?
+    @Published public private(set) var activeGrokProfileName = "활성 계정 없음"
     @Published public private(set) var openRouterBalance: OpenRouterBalancePresentation
     @Published public private(set) var codexProfiles: [CodexProfileMetadata] = []
     @Published public private(set) var selectedCodexProfileID: String?
@@ -378,6 +452,7 @@ public final class AppViewModel: ObservableObject {
     @Published public private(set) var cancelCodexSignInTitle: String?
     @Published public var profileName = "codex2"
     @Published public var claudeProfileName = "claude1"
+    @Published public var grokProfileName = "grok1"
     @Published private(set) var statusItemPresentation = StatusItemPresentation(
         claude: .unavailable(message: ""),
         codexProfiles: []
@@ -386,6 +461,7 @@ public final class AppViewModel: ObservableObject {
     private let coordinator: any AppUsageCoordinating
     private let profileActions: any CodexProfileActionHandling
     private let claudeProfileActions: any ClaudeProfileActionHandling
+    private let grokProfileActions: any GrokProfileActionHandling
     private let quitAction: @MainActor @Sendable () -> Void
     private let loginAttemptState: @Sendable () -> CodexLoginAttemptState
     private let reopenCodexSignInAction: @Sendable () -> Bool
@@ -401,6 +477,7 @@ public final class AppViewModel: ObservableObject {
         coordinator: any AppUsageCoordinating,
         profileActions: any CodexProfileActionHandling,
         claudeProfileActions: any ClaudeProfileActionHandling = UnavailableClaudeProfileActions(),
+        grokProfileActions: any GrokProfileActionHandling = UnavailableGrokProfileActions(),
         loginAttemptState: @escaping @Sendable () -> CodexLoginAttemptState = { .inactive },
         reopenCodexSignIn: @escaping @Sendable () -> Bool = { false },
         cancelCodexSignIn: @escaping @Sendable () -> Void = {},
@@ -415,6 +492,7 @@ public final class AppViewModel: ObservableObject {
         self.coordinator = coordinator
         self.profileActions = profileActions
         self.claudeProfileActions = claudeProfileActions
+        self.grokProfileActions = grokProfileActions
         self.loginAttemptState = loginAttemptState
         reopenCodexSignInAction = reopenCodexSignIn
         cancelCodexSignInAction = cancelCodexSignIn
@@ -522,6 +600,48 @@ public final class AppViewModel: ObservableObject {
             return
         }
         await deleteClaudeProfile(id: id)
+    }
+
+    public func selectGrokProfile(id: String) async {
+        guard id != selectedGrokProfileID else { return }
+        let previousID = selectedGrokProfileID
+        selectedGrokProfileID = id
+        let succeeded = await performProfileAction(
+            failureMessage: "Grok 계정을 전환하지 못했습니다."
+        ) {
+            try await self.grokProfileActions.selectGrokProfile(id: id)
+        }
+        if !succeeded { selectedGrokProfileID = previousID }
+    }
+
+    public func saveCurrentGrokProfile() async {
+        let name = grokProfileName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            errorText = "저장할 계정 이름을 입력해 주세요."
+            return
+        }
+        await performProfileAction(failureMessage: "현재 Grok 계정을 저장하지 못했습니다.") {
+            try await self.grokProfileActions.saveCurrentGrokProfile(named: name)
+        }
+    }
+
+    public func addGrokAccount() async {
+        let name = grokProfileName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            errorText = "로그인할 계정 이름을 먼저 입력해 주세요."
+            return
+        }
+        startLoginObservation()
+        defer { stopLoginObservation() }
+        await performProfileAction(failureMessage: "Grok 계정을 추가하지 못했습니다.") {
+            try await self.grokProfileActions.addGrokAccount(named: name)
+        }
+    }
+
+    public func deleteGrokProfile(id: String) async {
+        await performProfileAction(failureMessage: "Grok 계정을 삭제하지 못했습니다.") {
+            try await self.grokProfileActions.deleteGrokProfile(id: id)
+        }
     }
 
     public func selectCodexProfile(id: String) async {
@@ -672,6 +792,10 @@ public final class AppViewModel: ObservableObject {
                       let reason = claudeError.errorDescription
             {
                 errorText = "\(failureMessage) \(reason)"
+            } else if let grokError = error as? GrokProfileManagerError,
+                      let reason = grokError.errorDescription
+            {
+                errorText = "\(failureMessage) \(reason)"
             } else {
                 errorText = failureMessage
             }
@@ -721,6 +845,7 @@ public final class AppViewModel: ObservableObject {
                 openRouter: snapshot.openRouter
             )
         applyClaudeProfiles(snapshot, states: claudeStatesByProfileID)
+        applyGrokProfiles(snapshot)
         codexProfiles = snapshot.codexProfiles
         let activeIndex = snapshot.codexProfiles.firstIndex {
             $0.id == snapshot.activeCodexProfileID
@@ -864,6 +989,36 @@ public final class AppViewModel: ObservableObject {
         }?.name ?? "활성 계정 없음"
     }
 
+    private func applyGrokProfiles(_ snapshot: AppUsageSnapshot) {
+        let states = snapshot.grokUsage.reduce(into: [String: UsageState]()) {
+            $0[$1.profileID] = $1.state
+        }
+        grokProfiles = snapshot.grokProfiles
+        grokQuotaRows = snapshot.grokProfiles.map { profile in
+            let state = states[profile.id]
+                ?? .unavailable(message: "Grok 사용량을 불러오지 못했습니다.")
+            let window = usageSnapshot(from: state)?.weekly
+            let isMonthly = (window?.windowDuration ?? 0) > 8 * 24 * 60 * 60
+            return GrokProfileQuotaPresentation(
+                profileID: profile.id,
+                name: profile.name,
+                emailAddress: profile.emailAddress,
+                subscriptionTier: profile.subscriptionTier,
+                quota: compactPresentation(
+                    service: "Grok \(profile.name)",
+                    window: isMonthly ? "월간" : "주간",
+                    value: window
+                ),
+                freshnessText: freshnessText(for: state),
+                isActive: profile.id == snapshot.activeGrokProfileID
+            )
+        }
+        selectedGrokProfileID = snapshot.activeGrokProfileID
+        activeGrokProfileName = snapshot.grokProfiles.first {
+            $0.id == snapshot.activeGrokProfileID
+        }?.name ?? "활성 계정 없음"
+    }
+
     /// Claude reset credits are one-off promotions rather than a recurring allowance, so an
     /// account that has none (or has used them) shows nothing instead of a zero badge.
     private func resetCoupon(from snapshot: UsageSnapshot?) -> ResetCouponPresentation? {
@@ -908,6 +1063,7 @@ public final class AppViewModel: ObservableObject {
         openRouterBalance = Self.notConfiguredOpenRouter()
         codexQuotaRows = []
         claudeQuotaRows = []
+        grokQuotaRows = []
         lastRefreshText = "마지막 새로고침 시각 없음"
         lastRefreshAt = nil
     }

@@ -40,6 +40,7 @@ enum PopoverDesignSystem {
     enum Provider {
         case claude
         case codex
+        case grok
         case openRouter
 
         var accent: Color {
@@ -48,6 +49,8 @@ enum PopoverDesignSystem {
                 Color(nsColor: .systemOrange)
             case .codex:
                 Color(nsColor: .systemTeal)
+            case .grok:
+                Color(nsColor: .systemPink)
             case .openRouter:
                 Color(nsColor: .systemIndigo)
             }

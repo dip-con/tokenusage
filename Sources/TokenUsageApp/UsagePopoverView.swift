@@ -96,6 +96,7 @@ public struct UsagePopoverView: View {
             PopoverHeader(model: model)
             ClaudeQuotaSection(model: model)
             CodexQuotaSection(model: model)
+            GrokQuotaSection(model: model)
             OpenRouterQuotaSection(model: model)
             RefreshStatus(model: model)
             Divider()
@@ -473,6 +474,162 @@ private struct CodexProfileQuotaRow: View {
 
     private var quotaColor: Color {
         PopoverDesignSystem.Palette.quota(presentation.quota, provider: .codex)
+    }
+}
+
+private struct GrokQuotaSection: View {
+    @ObservedObject var model: AppViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: PopoverDesignSystem.Spacing.small) {
+            HStack(spacing: PopoverDesignSystem.Spacing.small) {
+                Image(systemName: "sparkle")
+                    .font(PopoverDesignSystem.Typography.detail)
+                    .frame(
+                        width: PopoverDesignSystem.Size.providerIcon,
+                        height: PopoverDesignSystem.Size.providerIcon
+                    )
+                    .foregroundStyle(PopoverDesignSystem.Provider.grok.accent)
+                    .accessibilityHidden(true)
+                Text("Grok")
+                    .font(PopoverDesignSystem.Typography.section)
+                Spacer(minLength: 0)
+                if !model.grokProfiles.isEmpty {
+                    Picker("계정", selection: profileSelection) {
+                        ForEach(model.grokProfiles, id: \.id) { profile in
+                            Text(profile.name).tag(Optional(profile.id))
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .accessibilityLabel("사용 중인 Grok 계정")
+                    .accessibilityValue(model.activeGrokProfileName)
+                    .accessibilityIdentifier("grok-profile-picker")
+                    .disabled(model.isPerformingProfileAction)
+                }
+            }
+
+            if model.grokQuotaRows.isEmpty {
+                Text("계정 관리에서 새 로그인으로 Grok 계정을 추가하세요.")
+                    .font(PopoverDesignSystem.Typography.detail)
+                    .foregroundStyle(PopoverDesignSystem.Palette.secondary)
+                    .lineLimit(1)
+                    .accessibilityIdentifier("grok-empty")
+            } else {
+                ScrollView(.vertical) {
+                    LazyVStack(spacing: PopoverDesignSystem.Spacing.xxSmall) {
+                        ForEach(model.grokQuotaRows) { row in
+                            GrokProfileQuotaRow(presentation: row) {
+                                Task { await model.selectGrokProfile(id: row.profileID) }
+                            }
+                            .disabled(model.isPerformingProfileAction)
+                        }
+                    }
+                }
+                .scrollIndicators(.hidden)
+                .frame(
+                    maxHeight: CodexProfileQuotaListLayout.maximumHeight(
+                        rowCount: model.grokQuotaRows.count
+                    )
+                )
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Grok 계정 사용량")
+                .accessibilityIdentifier("grok-profile-quota-list")
+            }
+
+            GrokProfileControls(model: model)
+        }
+        .providerPanel(.grok)
+    }
+
+    private var profileSelection: Binding<String?> {
+        Binding(
+            get: { model.selectedGrokProfileID },
+            set: { id in
+                guard let id else { return }
+                Task { await model.selectGrokProfile(id: id) }
+            }
+        )
+    }
+}
+
+private struct GrokProfileQuotaRow: View {
+    let presentation: GrokProfileQuotaPresentation
+    let activate: () -> Void
+
+    var body: some View {
+        Button(action: activate) {
+            VStack(alignment: .leading, spacing: PopoverDesignSystem.Spacing.xSmall) {
+                HStack(alignment: .firstTextBaseline, spacing: PopoverDesignSystem.Spacing.small) {
+                    Text(presentation.name)
+                        .font(PopoverDesignSystem.Typography.section)
+                        .lineLimit(1)
+                        .layoutPriority(2)
+                    if let email = presentation.emailAddress {
+                        Text(email)
+                            .font(PopoverDesignSystem.Typography.detail)
+                            .foregroundStyle(PopoverDesignSystem.Palette.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Spacer(minLength: 0)
+                    if presentation.isActive {
+                        ActiveBadge(provider: .grok)
+                    }
+                    FreshnessLabel(text: presentation.freshnessText)
+                        .fixedSize()
+                }
+                HStack(alignment: .firstTextBaseline, spacing: PopoverDesignSystem.Spacing.small) {
+                    Text(presentation.quota.window)
+                        .foregroundStyle(PopoverDesignSystem.Palette.secondary)
+                        .fixedSize()
+                    Text(presentation.quota.percentText)
+                        .font(PopoverDesignSystem.Typography.metric)
+                        .monospacedDigit()
+                        .foregroundStyle(
+                            PopoverDesignSystem.Palette.quota(presentation.quota, provider: .grok)
+                        )
+                        .fixedSize()
+                    QuotaBar(presentation: presentation.quota, provider: .grok)
+                    QuotaCue(presentation: presentation.quota, provider: .grok)
+                }
+                .font(PopoverDesignSystem.Typography.detail)
+                HStack(spacing: PopoverDesignSystem.Spacing.small) {
+                    Text(presentation.quota.reset)
+                        .lineLimit(1)
+                        .minimumScaleFactor(PopoverDesignSystem.Scale.minimumText)
+                    Spacer(minLength: 0)
+                    if let tier = presentation.subscriptionTier {
+                        Text(tier).lineLimit(1)
+                    }
+                }
+                .font(PopoverDesignSystem.Typography.detail)
+                .foregroundStyle(PopoverDesignSystem.Palette.secondary)
+            }
+            .padding(.horizontal, PopoverDesignSystem.Spacing.small)
+            .padding(.vertical, PopoverDesignSystem.Spacing.xSmall)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: CodexProfileQuotaListLayout.rowHeight)
+            .background(
+                RoundedRectangle(
+                    cornerRadius: PopoverDesignSystem.Radius.section,
+                    style: .continuous
+                )
+                .fill(
+                    presentation.isActive
+                        ? PopoverDesignSystem.Provider.grok.accent.opacity(
+                            PopoverDesignSystem.Opacity.activeFill
+                        )
+                        : PopoverDesignSystem.Palette.transparent
+                )
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityRepresentation {
+            Button(presentation.accessibilityLabel, action: activate)
+                .accessibilityIdentifier(presentation.accessibilityIdentifier)
+        }
     }
 }
 
@@ -867,6 +1024,146 @@ private struct ClaudeProfileControls: View {
             "지금 Claude Code 가 로그인된 계정을 이 이름으로 저장합니다."
         case .newLogin:
             "브라우저에서 다른 계정으로 로그인합니다. 지금 로그인된 계정은 유지됩니다."
+        }
+    }
+}
+
+private struct GrokProfileControls: View {
+    private enum Editor {
+        case saveCurrent
+        case newLogin
+    }
+
+    @ObservedObject var model: AppViewModel
+    @State private var editor: Editor?
+    @State private var deletionTarget: ProfileDeletionTarget?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: PopoverDesignSystem.Spacing.small) {
+            HStack {
+                Spacer(minLength: 0)
+                Menu {
+                    Button("현재 계정 저장…") {
+                        model.grokProfileName = ""
+                        editor = .saveCurrent
+                    }
+                    .accessibilityLabel("현재 Grok 로그인 저장")
+                    .accessibilityIdentifier("save-current-grok-profile")
+
+                    Button("새 로그인…") {
+                        model.grokProfileName = ""
+                        editor = .newLogin
+                    }
+                    .accessibilityLabel("새 Grok 로그인 시작")
+                    .accessibilityIdentifier("add-grok-account")
+
+                    if !model.grokProfiles.isEmpty {
+                        Divider()
+                        ForEach(model.grokProfiles, id: \.id) { profile in
+                            Button(role: .destructive) {
+                                deletionTarget = ProfileDeletionTarget(
+                                    id: profile.id,
+                                    name: profile.name
+                                )
+                            } label: {
+                                Text("\(profile.name) 삭제…")
+                            }
+                            .accessibilityIdentifier("delete-grok-profile-\(profile.id)")
+                        }
+                    }
+                } label: {
+                    Label("계정 관리", systemImage: "person.2")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .accessibilityLabel("Grok 계정 관리")
+                .accessibilityIdentifier("grok-profile-actions")
+            }
+            .disabled(model.isPerformingProfileAction)
+
+            if let editor {
+                EditorPanel {
+                    Text(description(for: editor))
+                        .font(PopoverDesignSystem.Typography.detail)
+                        .foregroundStyle(PopoverDesignSystem.Palette.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let status = model.codexLoginStatusText, editor == .newLogin {
+                        Text(status)
+                            .font(PopoverDesignSystem.Typography.detail)
+                            .accessibilityIdentifier("grok-login-status")
+                        HStack(spacing: PopoverDesignSystem.Spacing.small) {
+                            if let title = model.reopenCodexSignInTitle {
+                                Button(title) { model.reopenCodexSignIn() }
+                                    .accessibilityIdentifier("reopen-grok-sign-in")
+                            }
+                            if let title = model.cancelCodexSignInTitle {
+                                Button(title) { model.cancelCodexSignIn() }
+                                    .accessibilityIdentifier("cancel-grok-sign-in")
+                            }
+                        }
+                    } else {
+                        HStack(spacing: PopoverDesignSystem.Spacing.small) {
+                            TextField("계정 이름", text: $model.grokProfileName)
+                                .textFieldStyle(.roundedBorder)
+                                .accessibilityLabel("Grok 계정 이름")
+                                .accessibilityIdentifier(
+                                    editor == .saveCurrent
+                                        ? "grok-profile-name"
+                                        : "new-grok-profile-name"
+                                )
+
+                            Button("취소") { self.editor = nil }
+                                .accessibilityIdentifier("cancel-grok-editor")
+
+                            Button(editor == .saveCurrent ? "저장" : "계속") {
+                                Task {
+                                    if editor == .saveCurrent {
+                                        await model.saveCurrentGrokProfile()
+                                    } else {
+                                        await model.addGrokAccount()
+                                    }
+                                    self.editor = nil
+                                }
+                            }
+                            .keyboardShortcut(.defaultAction)
+                            .accessibilityIdentifier(
+                                editor == .saveCurrent
+                                    ? "confirm-save-current-grok-profile"
+                                    : "confirm-new-grok-login"
+                            )
+                        }
+                        .disabled(model.isPerformingProfileAction)
+                    }
+                }
+            }
+        }
+        .confirmationDialog(
+            deletionTarget.map { "\($0.name) 계정을 삭제할까요?" } ?? "",
+            isPresented: Binding(
+                get: { deletionTarget != nil },
+                set: { if !$0 { deletionTarget = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("삭제", role: .destructive) {
+                guard let target = deletionTarget else { return }
+                deletionTarget = nil
+                Task { await model.deleteGrokProfile(id: target.id) }
+            }
+            .accessibilityIdentifier("confirm-delete-grok-profile")
+            Button("취소", role: .cancel) { deletionTarget = nil }
+        } message: {
+            Text("이 Mac에 저장된 토큰만 지웁니다. grok CLI 로그인 자체는 그대로입니다.")
+        }
+    }
+
+    private func description(for editor: Editor) -> String {
+        switch editor {
+        case .saveCurrent:
+            "지금 grok CLI 가 로그인된 계정을 이 이름으로 저장합니다."
+        case .newLogin:
+            "브라우저에서 x.ai 계정으로 로그인해 표시된 코드를 승인하세요. 지금 로그인된 계정은 유지됩니다."
         }
     }
 }

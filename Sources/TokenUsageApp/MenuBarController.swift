@@ -388,6 +388,20 @@ protocol ClaudeProfileManaging: Sendable {
 
 extension ClaudeProfileManager: ClaudeProfileManaging {}
 
+protocol GrokProfileManaging: Sendable {
+    func listProfiles() async throws -> [GrokProfileMetadata]
+    func activeProfileID() async -> String?
+    func hasLiveAccount() async -> Bool
+    func saveCurrent(named name: String) async throws -> GrokProfileMetadata
+    func addAccount(named name: String) async throws -> GrokProfileMetadata?
+    func activateProfile(id: String) async throws
+    func removeProfile(id: String) async throws
+    func accessToken(for id: String) async throws -> String
+    func syncActiveProfile() async
+}
+
+extension GrokProfileManager: GrokProfileManaging {}
+
 protocol CodexProfileManaging: Sendable {
     func saveCurrent(named name: String) async throws -> CodexProfileMetadata
     func addAccount(named name: String) async throws -> CodexProfileMetadata?
@@ -406,7 +420,9 @@ struct CodexRefreshOutcome: Sendable {
     let failures: [String: any Error]
 }
 
-actor ProductionAppService: CodexProfileActionHandling, ClaudeProfileActionHandling {
+actor ProductionAppService: CodexProfileActionHandling, ClaudeProfileActionHandling,
+    GrokProfileActionHandling
+{
     private let loadClaude: @Sendable () async throws -> UsageSnapshot
     private let loadClaudeUsage: @Sendable (String) async throws -> UsageSnapshot
     private let loadCodex: @Sendable (URL) async throws -> UsageSnapshot
@@ -414,6 +430,10 @@ actor ProductionAppService: CodexProfileActionHandling, ClaudeProfileActionHandl
     private let validateCodexAccount: @Sendable (URL) async throws -> CodexAccount
     private let profileManager: any CodexProfileManaging
     private let claudeProfileManager: (any ClaudeProfileManaging)?
+    private let grokProfileManager: (any GrokProfileManaging)?
+    private let loadGrokUsage: @Sendable (String) async throws -> UsageSnapshot
+    private var previousGrokProfiles: [String: UsageState] = [:]
+    private var didBootstrapGrokProfile = false
     private var previousClaude: UsageState?
     private var previousClaudeProfiles: [String: UsageState] = [:]
     private var previousCodex: [String: UsageState] = [:]
@@ -426,8 +446,15 @@ actor ProductionAppService: CodexProfileActionHandling, ClaudeProfileActionHandl
         codexClient: CodexAppServerClient,
         openRouterClient: OpenRouterUsageClient,
         profileManager: any CodexProfileManaging,
-        claudeProfileManager: (any ClaudeProfileManaging)? = nil
+        claudeProfileManager: (any ClaudeProfileManaging)? = nil,
+        grokClient: GrokUsageClient? = nil,
+        grokProfileManager: (any GrokProfileManaging)? = nil
     ) {
+        loadGrokUsage = { token in
+            guard let grokClient else { throw GrokUsageClientError.unauthorized }
+            return try await grokClient.usage(accessToken: token)
+        }
+        self.grokProfileManager = grokProfileManager
         loadClaude = { try await claudeClient.usage() }
         loadClaudeUsage = { try await claudeClient.usage(accessToken: $0) }
         loadCodex = { try await codexClient.usage(codexHome: $0) }
@@ -450,8 +477,14 @@ actor ProductionAppService: CodexProfileActionHandling, ClaudeProfileActionHandl
         loadClaudeUsage: @escaping @Sendable (String) async throws -> UsageSnapshot = { _ in
             throw ClaudeUsageClientError.credentialUnavailable
         },
-        claudeProfileManager: (any ClaudeProfileManaging)? = nil
+        claudeProfileManager: (any ClaudeProfileManaging)? = nil,
+        loadGrokUsage: @escaping @Sendable (String) async throws -> UsageSnapshot = { _ in
+            throw GrokUsageClientError.unauthorized
+        },
+        grokProfileManager: (any GrokProfileManaging)? = nil
     ) {
+        self.loadGrokUsage = loadGrokUsage
+        self.grokProfileManager = grokProfileManager
         self.loadClaude = loadClaude
         self.loadClaudeUsage = loadClaudeUsage
         self.loadCodex = loadCodex
@@ -464,19 +497,27 @@ actor ProductionAppService: CodexProfileActionHandling, ClaudeProfileActionHandl
     func refresh() async -> AppUsageSnapshot {
         await bootstrapCurrentProfileIfNeeded()
         await bootstrapClaudeProfileIfNeeded()
+        await bootstrapGrokProfileIfNeeded()
         // Capture whatever Claude Code refreshed on its own before reading any stored token.
         await claudeProfileManager?.syncActiveProfile()
+        await grokProfileManager?.syncActiveProfile()
         let claudeProfiles = await listClaudeProfiles()
+        let grokProfiles = await listGrokProfiles()
+        async let grokResult = refreshGrokProfiles(grokProfiles)
         async let claudeResult = refreshLiveClaude(skip: !claudeProfiles.isEmpty)
         async let claudeProfileResult = refreshClaudeProfiles(claudeProfiles)
         async let openRouterResult = Self.loadOpenRouterUsage(loadOpenRouter)
         let profiles = (try? await profileManager.listProfiles()) ?? []
         async let codexResult = refreshCodexProfiles(profiles)
-        let (loadedClaude, claudeUsages, loadedOpenRouter, codex) = await (
+        let (loadedClaude, claudeUsages, loadedOpenRouter, codex, grokUsages) = await (
             claudeResult,
             claudeProfileResult,
             openRouterResult,
-            codexResult
+            codexResult,
+            grokResult
+        )
+        previousGrokProfiles = Dictionary(
+            uniqueKeysWithValues: grokUsages.map { ($0.profileID, $0.state) }
         )
 
         let claude: UsageState
@@ -506,8 +547,86 @@ actor ProductionAppService: CodexProfileActionHandling, ClaudeProfileActionHandl
             profiles: profiles.filter { !removedIDs.contains($0.id) },
             removedProfileNames: removed.map(\.name),
             claudeUsage: claudeUsages,
-            claudeProfiles: claudeProfiles
+            claudeProfiles: claudeProfiles,
+            grokUsage: grokUsages,
+            grokProfiles: grokProfiles
         )
+    }
+
+    private func listGrokProfiles() async -> [GrokProfileMetadata] {
+        guard let grokProfileManager else { return [] }
+        return (try? await grokProfileManager.listProfiles()) ?? []
+    }
+
+    private func refreshGrokProfiles(
+        _ profiles: [GrokProfileMetadata]
+    ) async -> [GrokProfileUsage] {
+        guard let manager = grokProfileManager, !profiles.isEmpty else { return [] }
+        let loader = loadGrokUsage
+        var states: [String: UsageState] = [:]
+        await withTaskGroup(of: (String, Result<UsageSnapshot, any Error>).self) { group in
+            for profile in profiles {
+                group.addTask {
+                    do {
+                        let token = try await manager.accessToken(for: profile.id)
+                        return (profile.id, .success(try await loader(token)))
+                    } catch {
+                        return (profile.id, .failure(error))
+                    }
+                }
+            }
+            while let (profileID, result) = await group.next() {
+                states[profileID] = Self.state(
+                    from: result,
+                    previous: previousGrokProfiles[profileID],
+                    service: "Grok"
+                )
+            }
+        }
+        return profiles.map {
+            GrokProfileUsage(
+                profileID: $0.id,
+                state: states[$0.id] ?? .unavailable(message: "Grok usage refresh failed.")
+            )
+        }
+    }
+
+    private func bootstrapGrokProfileIfNeeded() async {
+        guard let grokProfileManager, !didBootstrapGrokProfile else { return }
+        didBootstrapGrokProfile = true
+        guard let profiles = try? await grokProfileManager.listProfiles(),
+              profiles.isEmpty,
+              await grokProfileManager.hasLiveAccount() else {
+            return
+        }
+        _ = try? await grokProfileManager.saveCurrent(
+            named: GrokProfileManager.bootstrapProfileName
+        )
+    }
+
+    func selectGrokProfile(id: String) async throws -> AppUsageSnapshot {
+        try await requiredGrokProfileManager().activateProfile(id: id)
+        return await refresh()
+    }
+
+    func saveCurrentGrokProfile(named name: String) async throws -> AppUsageSnapshot {
+        _ = try await requiredGrokProfileManager().saveCurrent(named: name)
+        return await refresh()
+    }
+
+    func addGrokAccount(named name: String) async throws -> AppUsageSnapshot {
+        _ = try await requiredGrokProfileManager().addAccount(named: name)
+        return await refresh()
+    }
+
+    func deleteGrokProfile(id: String) async throws -> AppUsageSnapshot {
+        try await requiredGrokProfileManager().removeProfile(id: id)
+        return await refresh()
+    }
+
+    private func requiredGrokProfileManager() throws -> any GrokProfileManaging {
+        guard let grokProfileManager else { throw GrokProfileManagerError.storageFailed }
+        return grokProfileManager
     }
 
     private func listClaudeProfiles() async -> [ClaudeProfileMetadata] {
@@ -626,10 +745,13 @@ actor ProductionAppService: CodexProfileActionHandling, ClaudeProfileActionHandl
         profiles: [CodexProfileMetadata],
         removedProfileNames: [String] = [],
         claudeUsage: [ClaudeProfileUsage] = [],
-        claudeProfiles: [ClaudeProfileMetadata] = []
+        claudeProfiles: [ClaudeProfileMetadata] = [],
+        grokUsage: [GrokProfileUsage] = [],
+        grokProfiles: [GrokProfileMetadata] = []
     ) async -> AppUsageSnapshot {
         let activeID = await profileManager.activeProfileID()
         let activeClaudeID = await claudeProfileManager?.activeProfileID()
+        let activeGrokID = await grokProfileManager?.activeProfileID()
         return AppUsageSnapshot(
             claude: claude,
             codexUsage: codex,
@@ -641,6 +763,11 @@ actor ProductionAppService: CodexProfileActionHandling, ClaudeProfileActionHandl
             claudeProfiles: claudeProfiles,
             activeClaudeProfileID: claudeProfiles.contains(where: { $0.id == activeClaudeID })
                 ? activeClaudeID
+                : nil,
+            grokUsage: grokUsage,
+            grokProfiles: grokProfiles,
+            activeGrokProfileID: grokProfiles.contains(where: { $0.id == activeGrokID })
+                ? activeGrokID
                 : nil
         )
     }
@@ -932,12 +1059,29 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 attemptController: loginAttemptController
             )
         )
+        let grokClient = GrokUsageClient()
+        let grokProfileManager = GrokProfileManager(
+            credentialStore: KeychainCredentialStore(service: "local.tokenusage.grok-profiles"),
+            preferences: GrokProfilePreferences(),
+            liveAuthFile: AtomicAuthFileOperator(
+                authFileURL: Self.grokHome(environment: environment)
+                    .appendingPathComponent("auth.json", isDirectory: false)
+            ),
+            refresher: GrokOAuthRefresher(),
+            loginRunner: SystemGrokLoginRunner(
+                environment: environment,
+                attemptController: loginAttemptController
+            ),
+            subscriptionTier: { try? await grokClient.subscriptionTier(accessToken: $0) }
+        )
         let service = ProductionAppService(
             claudeClient: claudeClient,
             codexClient: codexClient,
             openRouterClient: openRouterClient,
             profileManager: profileManager,
-            claudeProfileManager: claudeProfileManager
+            claudeProfileManager: claudeProfileManager,
+            grokClient: grokClient,
+            grokProfileManager: grokProfileManager
         )
         let coordinator = AppRefreshCoordinator(
             coordinator: RefreshCoordinator(
@@ -950,6 +1094,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             coordinator: coordinator,
             profileActions: service,
             claudeProfileActions: service,
+            grokProfileActions: service,
             loginAttemptState: {
                 let presentation = loginAttemptController.presentation
                 return CodexLoginAttemptState(
@@ -982,6 +1127,17 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         }
         guard let port = UInt16(value), port != 0 else { return nil }
         return port
+    }
+
+    /// `GROK_HOME`, else `~/.grok`: the directory whose `auth.json` the `grok` CLI signs in with.
+    static func grokHome(environment: [String: String]) -> URL {
+        if let override = environment["GROK_HOME"], !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true).standardizedFileURL
+        }
+        let home = environment["HOME"].flatMap {
+            $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true)
+        } ?? FileManager.default.homeDirectoryForCurrentUser
+        return home.appendingPathComponent(".grok", isDirectory: true).standardizedFileURL
     }
 
     /// `~/.claude.json`, honouring `CLAUDE_CONFIG_DIR` the same way the CLI does.
