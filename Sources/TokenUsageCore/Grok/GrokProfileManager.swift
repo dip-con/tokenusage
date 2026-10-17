@@ -52,8 +52,9 @@ public enum GrokProfileManagerError: Error, Equatable, Sendable, LocalizedError 
 
 /// Named Grok accounts, switched by swapping the `auth.json` the `grok` CLI reads.
 ///
-/// The account the CLI is signed in as is the CLI's to renew; this app only renews the others,
-/// whose refresh tokens nothing else holds.
+/// The account the CLI is signed in as is the CLI's to renew while a `grok` process is running;
+/// otherwise nothing would ever renew it, so the app renews it and writes the rotated token back
+/// into `auth.json` for the next CLI start. The other accounts' refresh tokens only this app holds.
 public actor GrokProfileManager {
     public static let bootstrapProfileName = "grok1"
 
@@ -63,6 +64,7 @@ public actor GrokProfileManager {
     private let refresher: any GrokOAuthRefreshing
     private let loginRunner: (any GrokLoginRunning)?
     private let subscriptionTier: @Sendable (String) async -> String?
+    private let isCLIRunning: @Sendable () -> Bool
     private let temporaryDirectory: URL
     private let profileID: @Sendable () -> String
     private let now: @Sendable () -> Date
@@ -77,6 +79,7 @@ public actor GrokProfileManager {
         refresher: any GrokOAuthRefreshing,
         loginRunner: (any GrokLoginRunning)? = nil,
         subscriptionTier: @escaping @Sendable (String) async -> String? = { _ in nil },
+        isCLIRunning: @escaping @Sendable () -> Bool = { true },
         temporaryDirectory: URL = FileManager.default.temporaryDirectory,
         profileID: @escaping @Sendable () -> String = { UUID().uuidString },
         now: @escaping @Sendable () -> Date = Date.init
@@ -87,6 +90,7 @@ public actor GrokProfileManager {
         self.refresher = refresher
         self.loginRunner = loginRunner
         self.subscriptionTier = subscriptionTier
+        self.isCLIRunning = isCLIRunning
         self.temporaryDirectory = temporaryDirectory
         self.profileID = profileID
         self.now = now
@@ -189,13 +193,14 @@ public actor GrokProfileManager {
             throw GrokProfileManagerError.credentialMissing
         }
         let credential = try parsed(stored)
-        if id == preferences.activeProfileID {
-            guard !credential.isExpired(at: now(), leeway: 0) else {
-                throw GrokProfileManagerError.activeCredentialExpired
-            }
-            return credential.accessToken
+        let isActive = id == preferences.activeProfileID
+        if isActive {
+            guard credential.isExpired(at: now(), leeway: 0) else { return credential.accessToken }
+            // A running CLI holds the refresh token in memory; rotating it here would sign it out.
+            guard !isCLIRunning() else { throw GrokProfileManagerError.activeCredentialExpired }
+        } else {
+            guard credential.isExpired(at: now()) else { return credential.accessToken }
         }
-        guard credential.isExpired(at: now()) else { return credential.accessToken }
 
         let renewed: GrokRenewedToken
         do {
@@ -215,6 +220,11 @@ public actor GrokProfileManager {
             expiresAt: renewed.expiresAt,
             to: stored
         ) {
+            if isActive {
+                // The CLI reads this file on its next start; losing the race to it just means it
+                // already wrote a newer session, which the next sync picks up.
+                try? liveAuthFile.replaceAuthFile(with: updated, ifCurrentMatches: stored)
+            }
             do {
                 try credentialStore.storeCredential(updated, named: id)
                 unsavedCredentials[id] = nil

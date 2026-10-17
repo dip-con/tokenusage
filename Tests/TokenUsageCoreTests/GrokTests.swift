@@ -145,6 +145,27 @@ final class GrokProfileManagerTests: XCTestCase {
         XCTAssertEqual(fixture.refresher.calls, 0)
     }
 
+    func testAnExpiredActiveAccountIsRenewedAndWrittenBackWhileTheCLIIsNotRunning() async throws {
+        let fixture = Fixture(live: GrokFixture.authFile(token: "live", userID: "u1", expiresAt: now + 3_600))
+        fixture.refresher.result = GrokRenewedToken(
+            accessToken: "renewed",
+            refreshToken: "rotated",
+            expiresAt: now + 21_600
+        )
+        let manager = fixture.manager(now: now, cliRunning: false)
+        let saved = try await manager.saveCurrent(named: "personal")
+        fixture.live.current = GrokFixture.authFile(token: "live", userID: "u1", expiresAt: now - 60)
+        await manager.syncActiveProfile()
+
+        let token = try await manager.accessToken(for: saved.id)
+
+        XCTAssertEqual(token, "renewed")
+        let live = try GrokCredential.parse(try XCTUnwrap(fixture.live.current))
+        XCTAssertEqual(live.accessToken, "renewed", "the next CLI start must find the rotated token")
+        XCTAssertEqual(live.refreshToken, "rotated")
+        XCTAssertEqual(try fixture.credentials.credential(named: saved.id), fixture.live.current)
+    }
+
     func testAnExpiredInactiveAccountIsRenewedAndStored() async throws {
         let fixture = Fixture(live: GrokFixture.authFile(token: "live", userID: "u1", expiresAt: now + 3_600))
         fixture.refresher.result = GrokRenewedToken(
@@ -214,7 +235,7 @@ final class GrokProfileManagerTests: XCTestCase {
             self.live = MemoryAuthFile(current: live)
         }
 
-        func manager(now: Date) -> GrokProfileManager {
+        func manager(now: Date, cliRunning: Bool = true) -> GrokProfileManager {
             GrokProfileManager(
                 credentialStore: credentials,
                 preferences: preferences,
@@ -222,6 +243,7 @@ final class GrokProfileManagerTests: XCTestCase {
                 refresher: refresher,
                 loginRunner: login,
                 subscriptionTier: { _ in "SuperGrok" },
+                isCLIRunning: { cliRunning },
                 now: { now }
             )
         }

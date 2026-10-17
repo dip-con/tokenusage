@@ -450,6 +450,29 @@ final class CodexAppServerClientTests: XCTestCase {
         XCTAssertEqual(resolved.path, alias.path)
     }
 
+    func testResolverFindsNVMDefaultAliasWithoutAShellPath() throws {
+        let fixture = try CodexResolverFixture()
+        defer { fixture.remove() }
+        _ = try fixture.makeExecutable(at: "home/.nvm/versions/node/v99.0.0/bin/codex")
+        let aliased = try fixture.makeExecutable(at: "home/.nvm/versions/node/v24.15.0/bin/codex")
+        let aliasDirectory = fixture.root.appendingPathComponent("home/.nvm/alias", isDirectory: true)
+        try FileManager.default.createDirectory(at: aliasDirectory, withIntermediateDirectories: true)
+        try "24.15.0\n".write(
+            to: aliasDirectory.appendingPathComponent("default"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let resolved = try InstalledCodexExecutableResolver(fallbackDirectories: []).resolve(
+            environment: [
+                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                "HOME": fixture.root.appendingPathComponent("home", isDirectory: true).path,
+            ]
+        )
+
+        XCTAssertEqual(resolved.path, aliased.path)
+    }
+
     func testResolverSearchesPathThenHomeBinsBeforeFNM() throws {
         let fixture = try CodexResolverFixture()
         defer { fixture.remove() }

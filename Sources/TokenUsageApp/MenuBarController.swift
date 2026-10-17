@@ -1072,7 +1072,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 environment: environment,
                 attemptController: loginAttemptController
             ),
-            subscriptionTier: { try? await grokClient.subscriptionTier(accessToken: $0) }
+            subscriptionTier: { try? await grokClient.subscriptionTier(accessToken: $0) },
+            isCLIRunning: { GrokCLIProcessProbe.isRunning() }
         )
         let service = ProductionAppService(
             claudeClient: claudeClient,

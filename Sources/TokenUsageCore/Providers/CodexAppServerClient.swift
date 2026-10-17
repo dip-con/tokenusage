@@ -91,6 +91,10 @@ public struct InstalledCodexExecutableResolver: CodexExecutableResolving, Sendab
                 fileManager: fileManager
             ))
         }
+        directories.append(contentsOf: Self.nvmBinDirectories(
+            environment: environment,
+            fileManager: fileManager
+        ))
         directories.append(contentsOf: fallbackDirectories.map(\.path))
 
         var visited = Set<String>()
@@ -130,6 +134,45 @@ public struct InstalledCodexExecutableResolver: CodexExecutableResolving, Sendab
         }
         var visited = Set<String>()
         return roots.filter { visited.insert($0.standardizedFileURL.path).inserted }
+    }
+
+    /// An app launched from Finder or launchd gets no shell PATH, so an nvm-installed `codex` is
+    /// only found by looking in nvm's own tree: the default alias first, then newest version.
+    private static func nvmBinDirectories(
+        environment: [String: String],
+        fileManager: FileManager
+    ) -> [String] {
+        let root: URL
+        if let nvmDirectory = environment["NVM_DIR"], !nvmDirectory.isEmpty {
+            root = URL(fileURLWithPath: nvmDirectory, isDirectory: true)
+        } else if let home = environment["HOME"], !home.isEmpty {
+            root = URL(fileURLWithPath: home, isDirectory: true)
+                .appendingPathComponent(".nvm", isDirectory: true)
+        } else {
+            return []
+        }
+        let versionsRoot = root.appendingPathComponent("versions/node", isDirectory: true)
+        let versions = ((try? fileManager.contentsOfDirectory(
+            at: versionsRoot,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []).compactMap { url -> (url: URL, version: SemanticNodeVersion)? in
+            guard let version = SemanticNodeVersion(url.lastPathComponent) else { return nil }
+            return (url, version)
+        }
+        .sorted { $0.version > $1.version }
+        .map { $0.url.appendingPathComponent("bin", isDirectory: true).path }
+
+        let alias = (try? String(
+            contentsOf: root.appendingPathComponent("alias/default", isDirectory: false),
+            encoding: .utf8
+        ))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let aliasDirectory = alias.flatMap { alias -> String? in
+            guard SemanticNodeVersion(alias) != nil else { return nil }
+            let name = alias.hasPrefix("v") ? alias : "v\(alias)"
+            return versionsRoot.appendingPathComponent("\(name)/bin", isDirectory: true).path
+        }
+        return (aliasDirectory.map { [$0] } ?? []) + versions
     }
 
     private static func fnmVersionBinDirectories(root: URL, fileManager: FileManager) -> [String] {
