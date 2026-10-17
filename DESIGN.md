@@ -56,7 +56,12 @@ behaviour, legibility, and accessibility take priority over decorative web patte
   disable the chevron that would move past them rather than hiding it, so rows stay aligned.
 - Provider order is the single source for the popover (top to bottom) and the menu bar (left to
   right). A disabled provider disappears from both and is not refreshed.
-- With every provider off, the menu bar keeps one gauge symbol so the item stays clickable.
+- A second group, "메뉴 막대에 표시", leaves an enabled provider out of the menu bar title only;
+  its switch is disabled (and reads off) while the provider itself is off.
+- With every provider off or hidden, the menu bar keeps one gauge symbol so the item stays
+  clickable.
+- Style options that would change meaning or colour tokens app-wide (used % instead of
+  remaining, monochrome providers, larger menu-bar digits) are deliberately not offered yet.
 
 ## Native behaviour and QA
 

@@ -26,6 +26,30 @@ struct SettingsView: View {
                     .font(PopoverDesignSystem.Typography.detail)
                     .foregroundStyle(PopoverDesignSystem.Palette.secondary)
             }
+
+            Section {
+                ForEach(model.settings.providers.order) { provider in
+                    Toggle(
+                        provider.displayName,
+                        isOn: Binding(
+                            get: {
+                                model.settings.providers.isEnabled(provider)
+                                    && model.settings.providers.showsInMenuBar(provider)
+                            },
+                            set: { model.setProvider(provider, showsInMenuBar: $0) }
+                        )
+                    )
+                    .disabled(!model.settings.providers.isEnabled(provider))
+                    .accessibilityLabel("\(provider.displayName) 메뉴 막대에 표시")
+                    .accessibilityIdentifier("settings-menubar-\(provider.rawValue)")
+                }
+            } header: {
+                Text("메뉴 막대에 표시")
+            } footer: {
+                Text("끄면 팝오버에는 남기고 메뉴 막대 숫자에서만 빼어 폭을 줄입니다.")
+                    .font(PopoverDesignSystem.Typography.detail)
+                    .foregroundStyle(PopoverDesignSystem.Palette.secondary)
+            }
         }
         .formStyle(.grouped)
         .frame(width: 420)

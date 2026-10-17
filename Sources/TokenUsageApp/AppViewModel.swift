@@ -499,7 +499,7 @@ public final class AppViewModel: ObservableObject {
         self.grokProfileActions = grokProfileActions
         self.settingsStore = settingsStore
         settings = settingsStore.current
-        statusItemPresentation = Self.emptyStatusItem(order: settingsStore.current.providers.enabledInOrder)
+        statusItemPresentation = Self.emptyStatusItem(order: settingsStore.current.providers.menuBarInOrder)
         self.loginAttemptState = loginAttemptState
         reopenCodexSignInAction = reopenCodexSignIn
         cancelCodexSignInAction = cancelCodexSignIn
@@ -578,6 +578,12 @@ public final class AppViewModel: ObservableObject {
         if enabled { Task { await refreshNow() } }
     }
 
+    public func setProvider(_ provider: ProviderKind, showsInMenuBar shows: Bool) {
+        var updated = settings
+        updated.providers.setShowsInMenuBar(shows, for: provider)
+        apply(settings: updated)
+    }
+
     public func moveProvider(_ provider: ProviderKind, by offset: Int) {
         var updated = settings
         updated.providers.move(provider, by: offset)
@@ -591,7 +597,7 @@ public final class AppViewModel: ObservableObject {
         if let lastSnapshot {
             applySnapshot(lastSnapshot)
         } else {
-            statusItemPresentation = Self.emptyStatusItem(order: visibleProviders)
+            statusItemPresentation = Self.emptyStatusItem(order: settings.providers.menuBarInOrder)
         }
     }
 
@@ -902,14 +908,14 @@ public final class AppViewModel: ObservableObject {
                 codexProfiles: statusCodexProfiles,
                 openRouter: snapshot.openRouter,
                 grokProfiles: statusGrokProfiles,
-                providerOrder: visibleProviders
+                providerOrder: settings.providers.menuBarInOrder
             )
             : StatusItemPresentation(
                 claudeProfiles: statusClaudeProfiles,
                 codexProfiles: statusCodexProfiles,
                 openRouter: snapshot.openRouter,
                 grokProfiles: statusGrokProfiles,
-                providerOrder: visibleProviders
+                providerOrder: settings.providers.menuBarInOrder
             )
         applyClaudeProfiles(snapshot, states: claudeStatesByProfileID)
         applyGrokProfiles(snapshot)
@@ -1120,7 +1126,7 @@ public final class AppViewModel: ObservableObject {
 
     private func clearUsage() {
         lastSnapshot = nil
-        statusItemPresentation = Self.emptyStatusItem(order: visibleProviders)
+        statusItemPresentation = Self.emptyStatusItem(order: settings.providers.menuBarInOrder)
         claudeFiveHour = Self.unavailableWindow(service: "Claude", window: "5시간")
         claudeWeekly = Self.unavailableWindow(service: "Claude", window: "주간")
         claudeFableWeekly = Self.unavailableWindow(service: "Claude", window: "Fable 주간")

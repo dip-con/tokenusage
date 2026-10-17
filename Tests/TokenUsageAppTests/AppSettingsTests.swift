@@ -31,6 +31,20 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(settings.providers.enabledInOrder, [.grok, .claude, .codex])
     }
 
+    func testMenuBarListLeavesOutHiddenAndDisabledProvidersButKeepsThemInThePopover() throws {
+        var settings = AppSettings.default
+        settings.providers.setShowsInMenuBar(false, for: .codex)
+        settings.providers.setEnabled(false, for: .openRouter)
+
+        XCTAssertEqual(settings.providers.enabledInOrder, [.claude, .codex, .grok])
+        XCTAssertEqual(settings.providers.menuBarInOrder, [.claude, .grok])
+        let decoded = try JSONDecoder().decode(
+            AppSettings.self,
+            from: try JSONEncoder().encode(settings)
+        )
+        XCTAssertEqual(decoded, settings)
+    }
+
     func testMoveStopsAtTheEnds() {
         var settings = ProviderSettings.default
 

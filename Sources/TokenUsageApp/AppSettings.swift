@@ -23,10 +23,17 @@ public enum ProviderKind: String, CaseIterable, Identifiable, Sendable {
 public struct ProviderSettings: Equatable, Sendable {
     public private(set) var order: [ProviderKind]
     public private(set) var disabled: Set<ProviderKind>
+    /// Still refreshed and shown in the popover, just left out of the menu bar title.
+    public private(set) var hiddenFromMenuBar: Set<ProviderKind>
 
     public static let `default` = ProviderSettings(order: ProviderKind.allCases, disabled: [])
 
-    public init(order: [ProviderKind], disabled: Set<ProviderKind>) {
+    public init(
+        order: [ProviderKind],
+        disabled: Set<ProviderKind>,
+        hiddenFromMenuBar: Set<ProviderKind> = []
+    ) {
+        self.hiddenFromMenuBar = hiddenFromMenuBar
         // Every provider appears exactly once, so one the stored order predates still shows up.
         var seen = Set<ProviderKind>()
         let known = order.filter { seen.insert($0).inserted }
@@ -40,6 +47,18 @@ public struct ProviderSettings: Equatable, Sendable {
 
     public func isEnabled(_ provider: ProviderKind) -> Bool {
         !disabled.contains(provider)
+    }
+
+    public var menuBarInOrder: [ProviderKind] {
+        enabledInOrder.filter { !hiddenFromMenuBar.contains($0) }
+    }
+
+    public func showsInMenuBar(_ provider: ProviderKind) -> Bool {
+        !hiddenFromMenuBar.contains(provider)
+    }
+
+    public mutating func setShowsInMenuBar(_ shows: Bool, for provider: ProviderKind) {
+        if shows { hiddenFromMenuBar.remove(provider) } else { hiddenFromMenuBar.insert(provider) }
     }
 
     public mutating func setEnabled(_ enabled: Bool, for provider: ProviderKind) {
@@ -69,6 +88,7 @@ extension AppSettings: Codable {
     private enum CodingKeys: String, CodingKey {
         case providerOrder
         case disabledProviders
+        case menuBarHiddenProviders
     }
 
     public init(from decoder: any Decoder) throws {
@@ -79,7 +99,13 @@ extension AppSettings: Codable {
             .compactMap(ProviderKind.init(rawValue:))
         let disabled = (try container.decodeIfPresent([String].self, forKey: .disabledProviders) ?? [])
             .compactMap(ProviderKind.init(rawValue:))
-        self.init(providers: ProviderSettings(order: order, disabled: Set(disabled)))
+        let hidden = (try container.decodeIfPresent([String].self, forKey: .menuBarHiddenProviders) ?? [])
+            .compactMap(ProviderKind.init(rawValue:))
+        self.init(providers: ProviderSettings(
+            order: order,
+            disabled: Set(disabled),
+            hiddenFromMenuBar: Set(hidden)
+        ))
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -88,6 +114,10 @@ extension AppSettings: Codable {
         try container.encode(
             providers.disabled.map(\.rawValue).sorted(),
             forKey: .disabledProviders
+        )
+        try container.encode(
+            providers.hiddenFromMenuBar.map(\.rawValue).sorted(),
+            forKey: .menuBarHiddenProviders
         )
     }
 }
