@@ -48,6 +48,16 @@ behaviour, legibility, and accessibility take priority over decorative web patte
 - The menu bar keeps one column per Claude account: 5-hour over weekly, or over Fable when the
   plan has no weekly limit.
 
+## Settings window
+
+- One native grouped `Form`, 420 points wide, sized to its content; no tabs until there is
+  more than one group worth separating.
+- Provider rows: a switch with the provider name, then borderless up/down chevrons. The ends
+  disable the chevron that would move past them rather than hiding it, so rows stay aligned.
+- Provider order is the single source for the popover (top to bottom) and the menu bar (left to
+  right). A disabled provider disappears from both and is not refreshed.
+- With every provider off, the menu bar keeps one gauge symbol so the item stays clickable.
+
 ## Native behaviour and QA
 
 - Appearance follows macOS; there is no app-specific theme switch.

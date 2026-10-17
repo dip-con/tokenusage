@@ -453,6 +453,7 @@ public final class AppViewModel: ObservableObject {
     @Published public var profileName = "codex2"
     @Published public var claudeProfileName = "claude1"
     @Published public var grokProfileName = "grok1"
+    @Published public private(set) var settings: AppSettings
     @Published private(set) var statusItemPresentation = StatusItemPresentation(
         claude: .unavailable(message: ""),
         codexProfiles: []
@@ -462,6 +463,8 @@ public final class AppViewModel: ObservableObject {
     private let profileActions: any CodexProfileActionHandling
     private let claudeProfileActions: any ClaudeProfileActionHandling
     private let grokProfileActions: any GrokProfileActionHandling
+    private let settingsStore: any AppSettingsStoring
+    private var lastSnapshot: AppUsageSnapshot?
     private let quitAction: @MainActor @Sendable () -> Void
     private let loginAttemptState: @Sendable () -> CodexLoginAttemptState
     private let reopenCodexSignInAction: @Sendable () -> Bool
@@ -478,6 +481,7 @@ public final class AppViewModel: ObservableObject {
         profileActions: any CodexProfileActionHandling,
         claudeProfileActions: any ClaudeProfileActionHandling = UnavailableClaudeProfileActions(),
         grokProfileActions: any GrokProfileActionHandling = UnavailableGrokProfileActions(),
+        settingsStore: any AppSettingsStoring = InMemoryAppSettingsStore(),
         loginAttemptState: @escaping @Sendable () -> CodexLoginAttemptState = { .inactive },
         reopenCodexSignIn: @escaping @Sendable () -> Bool = { false },
         cancelCodexSignIn: @escaping @Sendable () -> Void = {},
@@ -493,6 +497,9 @@ public final class AppViewModel: ObservableObject {
         self.profileActions = profileActions
         self.claudeProfileActions = claudeProfileActions
         self.grokProfileActions = grokProfileActions
+        self.settingsStore = settingsStore
+        settings = settingsStore.current
+        statusItemPresentation = Self.emptyStatusItem(order: settingsStore.current.providers.enabledInOrder)
         self.loginAttemptState = loginAttemptState
         reopenCodexSignInAction = reopenCodexSignIn
         cancelCodexSignInAction = cancelCodexSignIn
@@ -550,6 +557,50 @@ public final class AppViewModel: ObservableObject {
 
     public func refreshNow() async {
         await coordinator.requestRefresh()
+    }
+
+    /// Set by the menu bar controller, which owns the window; nil in tests and previews.
+    public var openSettingsHandler: (@MainActor () -> Void)?
+
+    public func openSettings() {
+        openSettingsHandler?()
+    }
+
+    public var visibleProviders: [ProviderKind] {
+        settings.providers.enabledInOrder
+    }
+
+    public func setProvider(_ provider: ProviderKind, enabled: Bool) {
+        var updated = settings
+        updated.providers.setEnabled(enabled, for: provider)
+        apply(settings: updated)
+        // A provider just turned on has nothing to show until it is read.
+        if enabled { Task { await refreshNow() } }
+    }
+
+    public func moveProvider(_ provider: ProviderKind, by offset: Int) {
+        var updated = settings
+        updated.providers.move(provider, by: offset)
+        apply(settings: updated)
+    }
+
+    func apply(settings updated: AppSettings) {
+        guard updated != settings else { return }
+        settings = updated
+        settingsStore.save(updated)
+        if let lastSnapshot {
+            applySnapshot(lastSnapshot)
+        } else {
+            statusItemPresentation = Self.emptyStatusItem(order: visibleProviders)
+        }
+    }
+
+    private static func emptyStatusItem(order: [ProviderKind]) -> StatusItemPresentation {
+        StatusItemPresentation(
+            claude: .unavailable(message: ""),
+            codexProfiles: [],
+            providerOrder: order
+        )
     }
 
     public func selectClaudeProfile(id: String) async {
@@ -804,6 +855,18 @@ public final class AppViewModel: ObservableObject {
     }
 
     private func applySnapshot(_ snapshot: AppUsageSnapshot) {
+        lastSnapshot = snapshot
+        let grokStatesByProfileID = snapshot.grokUsage.reduce(into: [String: UsageState]()) {
+            $0[$1.profileID] = $1.state
+        }
+        let statusGrokProfiles = snapshot.grokProfiles.map { profile in
+            StatusItemCodexProfileState(
+                profileID: profile.id,
+                name: profile.name,
+                state: grokStatesByProfileID[profile.id]
+                    ?? .unavailable(message: "Grok 사용량을 불러오지 못했습니다.")
+            )
+        }
         let claudeStatesByProfileID = snapshot.claudeUsage.reduce(into: [String: UsageState]()) {
             $0[$1.profileID] = $1.state
         }
@@ -837,12 +900,16 @@ public final class AppViewModel: ObservableObject {
             ? StatusItemPresentation(
                 claude: snapshot.claude,
                 codexProfiles: statusCodexProfiles,
-                openRouter: snapshot.openRouter
+                openRouter: snapshot.openRouter,
+                grokProfiles: statusGrokProfiles,
+                providerOrder: visibleProviders
             )
             : StatusItemPresentation(
                 claudeProfiles: statusClaudeProfiles,
                 codexProfiles: statusCodexProfiles,
-                openRouter: snapshot.openRouter
+                openRouter: snapshot.openRouter,
+                grokProfiles: statusGrokProfiles,
+                providerOrder: visibleProviders
             )
         applyClaudeProfiles(snapshot, states: claudeStatesByProfileID)
         applyGrokProfiles(snapshot)
@@ -921,19 +988,20 @@ public final class AppViewModel: ObservableObject {
             lastRefreshText = "마지막 새로고침 시각 없음"
         }
 
-        let staleServices = [
-            claude.isStale ? "Claude" : nil,
-            codex.isStale ? "Codex" : nil,
+        let checkedServices: [(String, UsageState)] = [
+            settings.providers.isEnabled(.claude) ? ("Claude", claude) : nil,
+            settings.providers.isEnabled(.codex) ? ("Codex", codex) : nil,
         ].compactMap { $0 }
-        let unavailableServices = [claude, codex].filter(\.isUnavailable).count
+        let staleServices = checkedServices.filter { $0.1.isStale }.map(\.0)
+        let unavailableServices = checkedServices.filter { $0.1.isUnavailable }.count
         if !staleServices.isEmpty {
             statusText = "일부 항목은 이전 값입니다."
             errorText = "\(staleServices.joined(separator: ", ")) 사용량을 "
                 + "새로고침하지 못했습니다. 다시 시도해 주세요."
-        } else if unavailableServices == 2 {
+        } else if unavailableServices > 0, unavailableServices == checkedServices.count {
             statusText = "사용량을 불러오지 못했습니다"
             errorText = "서비스를 불러오지 못했습니다. 다시 시도해 주세요."
-        } else if unavailableServices == 1 {
+        } else if unavailableServices > 0 {
             statusText = "일부 항목을 불러오지 못했습니다"
             errorText = "일부 서비스를 불러오지 못했습니다. 다시 시도해 주세요."
         } else {
@@ -1051,10 +1119,8 @@ public final class AppViewModel: ObservableObject {
     }
 
     private func clearUsage() {
-        statusItemPresentation = StatusItemPresentation(
-            claude: .unavailable(message: ""),
-            codexProfiles: []
-        )
+        lastSnapshot = nil
+        statusItemPresentation = Self.emptyStatusItem(order: visibleProviders)
         claudeFiveHour = Self.unavailableWindow(service: "Claude", window: "5시간")
         claudeWeekly = Self.unavailableWindow(service: "Claude", window: "주간")
         claudeFableWeekly = Self.unavailableWindow(service: "Claude", window: "Fable 주간")

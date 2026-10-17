@@ -106,12 +106,16 @@ enum MobileUsagePages {
     function render(d) {
       const main = document.getElementById("main");
       main.replaceChildren();
-      const claude = sectionView("Claude", "var(--claude)");
-      d.claude.forEach(a => claude.append(accountView(a, a.windows || [a.fiveHour, a.weekly])));
-      main.append(claude);
-      const codex = sectionView("Codex", "var(--codex)");
-      d.codex.forEach(a => codex.append(accountView(a, [a.weekly])));
-      main.append(codex);
+      if (d.claude.length) {
+        const claude = sectionView("Claude", "var(--claude)");
+        d.claude.forEach(a => claude.append(accountView(a, a.windows || [a.fiveHour, a.weekly])));
+        main.append(claude);
+      }
+      if (d.codex.length) {
+        const codex = sectionView("Codex", "var(--codex)");
+        d.codex.forEach(a => codex.append(accountView(a, [a.weekly])));
+        main.append(codex);
+      }
       if (d.openRouter) {
         const r = sectionView("OpenRouter", "var(--router)");
         const row = el("div", "row");
@@ -208,25 +212,31 @@ enum MobileUsagePages {
       const claude = d.claude.find(a => a.active) || d.claude[0];
       const codex = d.codex.find(a => a.active) || d.codex[0];
       // Team plans have no all-model weekly limit; their second window is the Fable one.
-      const claudeWeek = (claude.windows && claude.windows[1]) || claude.weekly;
+      const claudeWeek = claude && ((claude.windows && claude.windows[1]) || claude.weekly);
 
       if (accessory) {
-        const t = w.addText("C " + pct(claude.fiveHour.percent) + "/" + pct(claudeWeek.percent)
-          + "  X " + pct(codex.weekly.percent));
+        const parts = [];
+        if (claude) parts.push("C " + pct(claude.fiveHour.percent) + "/" + pct(claudeWeek.percent));
+        if (codex) parts.push("X " + pct(codex.weekly.percent));
+        const t = w.addText(parts.join("  ") || "--");
         t.font = Font.boldSystemFont(12);
-        if (claude.coupon) w.addText("🎟 " + claude.coupon.text).font = Font.systemFont(10);
+        if (claude && claude.coupon) w.addText("🎟 " + claude.coupon.text).font = Font.systemFont(10);
         return w;
       }
 
       const size = family === "small" ? 13 : 15;
-      const title = w.addText("Claude · " + claude.name + (claude.coupon ? "  🎟" + claude.coupon.text.replace("쿠폰 ", "") : ""));
-      title.font = Font.semiboldSystemFont(size - 3); title.textColor = Color.orange(); title.lineLimit = 1;
-      addLine(w, "5시간", pct(claude.fiveHour.percent), tone(claude.fiveHour.percent), size);
-      addLine(w, claudeWeek.label, pct(claudeWeek.percent), tone(claudeWeek.percent), size);
-      w.addSpacer(4);
-      const codexTitle = w.addText("Codex · " + codex.name);
-      codexTitle.font = Font.semiboldSystemFont(size - 3); codexTitle.textColor = Color.cyan(); codexTitle.lineLimit = 1;
-      addLine(w, "주간", pct(codex.weekly.percent), tone(codex.weekly.percent), size);
+      if (claude) {
+        const title = w.addText("Claude · " + claude.name + (claude.coupon ? "  🎟" + claude.coupon.text.replace("쿠폰 ", "") : ""));
+        title.font = Font.semiboldSystemFont(size - 3); title.textColor = Color.orange(); title.lineLimit = 1;
+        addLine(w, "5시간", pct(claude.fiveHour.percent), tone(claude.fiveHour.percent), size);
+        addLine(w, claudeWeek.label, pct(claudeWeek.percent), tone(claudeWeek.percent), size);
+        w.addSpacer(4);
+      }
+      if (codex) {
+        const codexTitle = w.addText("Codex · " + codex.name);
+        codexTitle.font = Font.semiboldSystemFont(size - 3); codexTitle.textColor = Color.cyan(); codexTitle.lineLimit = 1;
+        addLine(w, "주간", pct(codex.weekly.percent), tone(codex.weekly.percent), size);
+      }
       w.addSpacer();
       const stamp = w.addText(d.refreshedText);
       stamp.font = Font.systemFont(9); stamp.textColor = Color.gray(); stamp.lineLimit = 1;

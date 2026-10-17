@@ -52,6 +52,7 @@ done
 [[ -f "$ROOT_DIR/Sources/TokenUsageApp/Resources/MenuBarIcons/anthropic.png" ]] || fail "missing Resources/MenuBarIcons/anthropic.png"
 [[ -f "$ROOT_DIR/Sources/TokenUsageApp/Resources/MenuBarIcons/codex.png" ]] || fail "missing Resources/MenuBarIcons/codex.png"
 [[ -f "$ROOT_DIR/Sources/TokenUsageApp/Resources/MenuBarIcons/openrouter.png" ]] || fail "missing Resources/MenuBarIcons/openrouter.png"
+[[ -f "$ROOT_DIR/Sources/TokenUsageApp/Resources/MenuBarIcons/grok.png" ]] || fail "missing Resources/MenuBarIcons/grok.png"
 
 # Remove only this generated bundle, so a failed attempt cannot leave a stale app.
 rm -rf "$APP_DIR"
@@ -101,6 +102,7 @@ cp "$ROOT_DIR/Sources/TokenUsageApp/Resources/ProviderIcons/ATTRIBUTION.md" "$AP
 cp "$ROOT_DIR/Sources/TokenUsageApp/Resources/MenuBarIcons/anthropic.png" "$APP_DIR/Contents/Resources/MenuBarIcons/anthropic.png"
 cp "$ROOT_DIR/Sources/TokenUsageApp/Resources/MenuBarIcons/codex.png" "$APP_DIR/Contents/Resources/MenuBarIcons/codex.png"
 cp "$ROOT_DIR/Sources/TokenUsageApp/Resources/MenuBarIcons/openrouter.png" "$APP_DIR/Contents/Resources/MenuBarIcons/openrouter.png"
+cp "$ROOT_DIR/Sources/TokenUsageApp/Resources/MenuBarIcons/grok.png" "$APP_DIR/Contents/Resources/MenuBarIcons/grok.png"
 cp -R "$RESOURCE_BUNDLE_PATH" "$APP_DIR/Contents/Resources/$RESOURCE_BUNDLE_NAME"
 
 /usr/bin/plutil -lint "$APP_DIR/Contents/Info.plist" >/dev/null || fail "invalid bundle Info.plist"

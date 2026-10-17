@@ -159,9 +159,9 @@ extension AppViewModel {
             refreshedText: lastRefreshText,
             status: statusText,
             error: errorText,
-            claude: claude,
-            codex: codex,
-            openRouter: openRouter
+            claude: settings.providers.isEnabled(.claude) ? claude : [],
+            codex: settings.providers.isEnabled(.codex) ? codex : [],
+            openRouter: settings.providers.isEnabled(.openRouter) ? openRouter : nil
         )
     }
 

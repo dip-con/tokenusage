@@ -56,3 +56,10 @@ SOFTWARE.
 
 CC0 does not require attribution. OpenRouter's name and mark remain subject to
 OpenRouter's trademark rights.
+
+## Grok
+
+- Asset: `MenuBarIcons/grok.png`
+- Source: an original four-point star drawn for this project; it is not xAI's or
+  Grok's logo. It stands for Grok only by placement next to the Grok usage values.
+- License: same as this project (MIT).

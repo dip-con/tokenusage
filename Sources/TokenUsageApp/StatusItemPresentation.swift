@@ -35,6 +35,7 @@ struct StatusItemCodexProfile: Equatable, Sendable {
 struct StatusItemPresentation: Equatable, Sendable {
     static let claudeMark = "✳"
     static let codexMark = "◎"
+    static let grokMark = "✦"
     static let openRouterMark = "◑"
     static let staleIndicator = "•"
 
@@ -42,6 +43,10 @@ struct StatusItemPresentation: Equatable, Sendable {
     /// (Fable weekly when the plan has no all-model weekly limit).
     let claudeProfiles: [StatusItemClaudeProfile]
     let codexProfiles: [StatusItemCodexProfile]
+    /// One weekly (or monthly) remaining value per Grok account; empty hides the Grok group.
+    let grokProfiles: [StatusItemCodexProfile]
+    /// The provider groups shown, left to right; a provider missing here is hidden.
+    let providerOrder: [ProviderKind]
     /// nil when OpenRouter has no key or its balance could not be read; the label stays hidden then.
     let openRouterBalanceText: String?
     let isStale: Bool
@@ -59,9 +64,14 @@ struct StatusItemPresentation: Equatable, Sendable {
     }
 
     var visibleLabels: [String] {
-        claudeProfiles.flatMap { [$0.fiveHourText, $0.weeklyText] }
-            + codexWeeklyTexts
-            + [openRouterBalanceText].compactMap { $0 }
+        providerOrder.flatMap { provider -> [String] in
+            switch provider {
+            case .claude: claudeProfiles.flatMap { [$0.fiveHourText, $0.weeklyText] }
+            case .codex: codexWeeklyTexts
+            case .grok: grokProfiles.map(\.weeklyText)
+            case .openRouter: [openRouterBalanceText].compactMap { $0 }
+            }
+        }
     }
 
     var staleIndicatorText: String? {
@@ -71,10 +81,19 @@ struct StatusItemPresentation: Equatable, Sendable {
     init(
         claudeProfiles: [StatusItemClaudeProfileState],
         codexProfiles: [StatusItemCodexProfileState],
-        openRouter: OpenRouterUsageState = .notConfigured(message: "")
+        openRouter: OpenRouterUsageState = .notConfigured(message: ""),
+        grokProfiles: [StatusItemCodexProfileState] = [],
+        providerOrder: [ProviderKind] = ProviderKind.allCases
     ) {
-        let claudeContents = claudeProfiles.map { Self.content(from: $0.state) }
-        let codexContents = codexProfiles.map { Self.content(from: $0.state) }
+        let claudeContents = providerOrder.contains(.claude)
+            ? claudeProfiles.map { Self.content(from: $0.state) }
+            : []
+        let codexContents = providerOrder.contains(.codex)
+            ? codexProfiles.map { Self.content(from: $0.state) }
+            : []
+        let grokContents = providerOrder.contains(.grok)
+            ? grokProfiles.map { Self.content(from: $0.state) }
+            : []
 
         self.claudeProfiles = zip(claudeProfiles, claudeContents).map { profile, content in
             let weeklyIsFable = content.snapshot?.weekly == nil && content.snapshot?.fableWeekly != nil
@@ -95,22 +114,36 @@ struct StatusItemPresentation: Equatable, Sendable {
                 weeklyText: Self.label(value: content.snapshot?.weekly)
             )
         }
-        openRouterBalanceText = Self.balanceLabel(from: openRouter)
-        isStale = claudeContents.contains { $0.isStale } || codexContents.contains { $0.isStale }
+        self.grokProfiles = zip(grokProfiles, grokContents).map { profile, content in
+            StatusItemCodexProfile(
+                profileID: profile.profileID,
+                name: profile.name,
+                weeklyText: Self.label(value: content.snapshot?.weekly)
+            )
+        }
+        self.providerOrder = providerOrder
+        openRouterBalanceText = providerOrder.contains(.openRouter)
+            ? Self.balanceLabel(from: openRouter)
+            : nil
+        isStale = (claudeContents + codexContents + grokContents).contains { $0.isStale }
     }
 
     /// Single-account form, used before any Claude profile has been captured.
     init(
         claude: UsageState,
         codexProfiles: [StatusItemCodexProfileState],
-        openRouter: OpenRouterUsageState = .notConfigured(message: "")
+        openRouter: OpenRouterUsageState = .notConfigured(message: ""),
+        grokProfiles: [StatusItemCodexProfileState] = [],
+        providerOrder: [ProviderKind] = ProviderKind.allCases
     ) {
         self.init(
             claudeProfiles: [
                 StatusItemClaudeProfileState(profileID: "", name: "Claude", state: claude)
             ],
             codexProfiles: codexProfiles,
-            openRouter: openRouter
+            openRouter: openRouter,
+            grokProfiles: grokProfiles,
+            providerOrder: providerOrder
         )
     }
 

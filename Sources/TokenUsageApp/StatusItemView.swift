@@ -3,6 +3,7 @@ import AppKit
 enum StatusItemIcon: String, CaseIterable, Sendable {
     case anthropic
     case codex
+    case grok
     case openrouter
 
     @MainActor
@@ -14,6 +15,8 @@ enum StatusItemIcon: String, CaseIterable, Sendable {
             StatusItemPresentation.claudeMark
         case .codex:
             StatusItemPresentation.codexMark
+        case .grok:
+            StatusItemPresentation.grokMark
         case .openrouter:
             StatusItemPresentation.openRouterMark
         }
@@ -101,6 +104,11 @@ final class StatusItemView: NSView {
     private let codexIconView: NSView
     private let codexStack: NSStackView
     private var codexWeeklyLabels: [NSTextField] = []
+    private let grokIconView: NSView
+    private let grokStack: NSStackView
+    private var grokWeeklyLabels: [NSTextField] = []
+    /// Keeps the item clickable, so settings stay reachable, when every provider is turned off.
+    private let emptyIconView: NSView
     private let openRouterIconView: NSView
     private let openRouterBalanceLabel: NSTextField
     private let staleIndicatorLabel: NSTextField
@@ -133,6 +141,13 @@ final class StatusItemView: NSView {
         codexStack.alignment = .leading
         codexStack.spacing = StatusItemDesignSystem.Spacing.codexRow
         self.codexStack = codexStack
+        grokIconView = StatusItemIcon.grok.makeView()
+        let grokStack = NSStackView()
+        grokStack.orientation = .vertical
+        grokStack.alignment = .leading
+        grokStack.spacing = StatusItemDesignSystem.Spacing.codexRow
+        self.grokStack = grokStack
+        emptyIconView = Self.emptyIcon()
         let openRouterIconView = StatusItemIcon.openrouter.makeView()
         self.openRouterIconView = openRouterIconView
         openRouterBalanceLabel = Self.label(
@@ -147,20 +162,10 @@ final class StatusItemView: NSView {
             accessibilityLabel: "Usage data is stale"
         )
 
-        contentStack = NSStackView(views: [
-            claudeIconView,
-            claudeStack,
-            codexIconView,
-            codexStack,
-            openRouterIconView,
-            openRouterBalanceLabel,
-            staleIndicatorLabel,
-        ])
+        contentStack = NSStackView()
         contentStack.orientation = .horizontal
         contentStack.alignment = .centerY
         contentStack.spacing = StatusItemDesignSystem.Spacing.compact
-        contentStack.setCustomSpacing(StatusItemDesignSystem.Spacing.section, after: claudeStack)
-        contentStack.setCustomSpacing(StatusItemDesignSystem.Spacing.section, after: codexStack)
 
         super.init(frame: .zero)
 
@@ -264,14 +269,71 @@ final class StatusItemView: NSView {
             return label
         }
         codexWeeklyLabels.forEach(codexStack.addArrangedSubview)
+        for label in grokWeeklyLabels {
+            grokStack.removeArrangedSubview(label)
+            label.removeFromSuperview()
+        }
+        grokWeeklyLabels = presentation.grokProfiles.map { profile in
+            let label = Self.label(
+                text: profile.weeklyText,
+                font: StatusItemDesignSystem.Typography.valueFont,
+                accessibilityLabel: "Grok \(profile.name) remaining"
+            )
+            label.setAccessibilityIdentifier("token-usage-grok-\(profile.profileID)-quota")
+            label.widthAnchor.constraint(equalToConstant: valueWidth).isActive = true
+            return label
+        }
+        grokWeeklyLabels.forEach(grokStack.addArrangedSubview)
         openRouterBalanceLabel.stringValue = presentation.openRouterBalanceText ?? ""
-        openRouterBalanceLabel.isHidden = presentation.openRouterBalanceText == nil
-        openRouterIconView.isHidden = presentation.openRouterBalanceText == nil
+        arrangeGroups(for: presentation)
         staleIndicatorLabel.alphaValue = presentation.isStale ? 1 : 0
         staleIndicatorLabel.setAccessibilityElement(presentation.isStale)
         setAccessibilityLabel(accessibilityDescription(for: presentation))
         needsLayout = true
         invalidateIntrinsicContentSize()
+    }
+
+    private func arrangeGroups(for presentation: StatusItemPresentation) {
+        for view in contentStack.arrangedSubviews {
+            contentStack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        let groups: [[NSView]] = presentation.providerOrder.compactMap { provider in
+            switch provider {
+            case .claude:
+                presentation.claudeProfiles.isEmpty ? nil : [claudeIconView, claudeStack]
+            case .codex:
+                [codexIconView, codexStack]
+            case .grok:
+                presentation.grokProfiles.isEmpty ? nil : [grokIconView, grokStack]
+            case .openRouter:
+                presentation.openRouterBalanceText == nil
+                    ? nil
+                    : [openRouterIconView, openRouterBalanceLabel]
+            }
+        }
+        for group in (groups.isEmpty ? [[emptyIconView]] : groups) {
+            group.forEach(contentStack.addArrangedSubview)
+            if let last = group.last {
+                contentStack.setCustomSpacing(StatusItemDesignSystem.Spacing.section, after: last)
+            }
+        }
+        contentStack.addArrangedSubview(staleIndicatorLabel)
+    }
+
+    private static func emptyIcon() -> NSView {
+        let image = NSImage(
+            systemSymbolName: "gauge.with.dots.needle.33percent",
+            accessibilityDescription: "Token Usage"
+        ) ?? NSImage()
+        image.isTemplate = true
+        let view = NSImageView(image: image)
+        view.symbolConfiguration = .init(
+            pointSize: StatusItemDesignSystem.Layout.providerIconPointSize,
+            weight: .medium
+        )
+        view.setAccessibilityIdentifier("token-usage-empty-icon")
+        return view
     }
 
     private static func label(
@@ -301,10 +363,18 @@ final class StatusItemView: NSView {
                     "\($0.name) \($0.fiveHourText), \($0.weeklyAccessibilityName) \($0.weeklyText)"
                 }
                 .joined(separator: ", ")
-        var description = "Claude \(claudeDescription); Codex \(codexDescription)"
-        if let balance = presentation.openRouterBalanceText {
-            description += "; OpenRouter \(balance)"
+        let grokDescription = presentation.grokProfiles
+            .map { "\($0.name) \($0.weeklyText)" }
+            .joined(separator: ", ")
+        let parts: [String] = presentation.providerOrder.compactMap { provider in
+            switch provider {
+            case .claude: "Claude \(claudeDescription)"
+            case .codex: "Codex \(codexDescription)"
+            case .grok: presentation.grokProfiles.isEmpty ? nil : "Grok \(grokDescription)"
+            case .openRouter: presentation.openRouterBalanceText.map { "OpenRouter \($0)" }
+            }
         }
+        var description = parts.isEmpty ? "Token Usage" : parts.joined(separator: "; ")
         if presentation.isStale {
             description += "; usage data is stale"
         }

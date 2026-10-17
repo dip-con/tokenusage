@@ -47,10 +47,11 @@ for resource in \
     "Contents/Resources/ProviderIcons/OpenAI.svg" \
     "Contents/Resources/MenuBarIcons/anthropic.png" \
     "Contents/Resources/MenuBarIcons/codex.png" \
-    "Contents/Resources/MenuBarIcons/openrouter.png"; do
+    "Contents/Resources/MenuBarIcons/openrouter.png" \
+    "Contents/Resources/MenuBarIcons/grok.png"; do
     [[ -f "$APP_PATH/$resource" ]] || fail "missing packaged resource: $resource"
 done
-for resource in Anthropic.svg OpenAI.svg anthropic.png codex.png openrouter.png ATTRIBUTION.md; do
+for resource in Anthropic.svg OpenAI.svg anthropic.png codex.png openrouter.png grok.png ATTRIBUTION.md; do
     [[ -n "$(find "$APP_PATH/Contents/Resources/$RESOURCE_BUNDLE_NAME" -type f -name "$resource" -print -quit)" ]] \
         || fail "missing SwiftPM bundle resource: $resource"
 done

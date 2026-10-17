@@ -440,6 +440,8 @@ actor ProductionAppService: CodexProfileActionHandling, ClaudeProfileActionHandl
     private var previousOpenRouter: OpenRouterUsageState?
     private var didBootstrapProfile = false
     private var didBootstrapClaudeProfile = false
+    /// Disabled providers are not refreshed at all: no request, no CLI process, no bootstrap.
+    private let settings: any AppSettingsStoring
 
     init(
         claudeClient: ClaudeUsageClient,
@@ -448,8 +450,10 @@ actor ProductionAppService: CodexProfileActionHandling, ClaudeProfileActionHandl
         profileManager: any CodexProfileManaging,
         claudeProfileManager: (any ClaudeProfileManaging)? = nil,
         grokClient: GrokUsageClient? = nil,
-        grokProfileManager: (any GrokProfileManaging)? = nil
+        grokProfileManager: (any GrokProfileManaging)? = nil,
+        settings: any AppSettingsStoring = InMemoryAppSettingsStore()
     ) {
+        self.settings = settings
         loadGrokUsage = { token in
             guard let grokClient else { throw GrokUsageClientError.unauthorized }
             return try await grokClient.usage(accessToken: token)
@@ -481,8 +485,10 @@ actor ProductionAppService: CodexProfileActionHandling, ClaudeProfileActionHandl
         loadGrokUsage: @escaping @Sendable (String) async throws -> UsageSnapshot = { _ in
             throw GrokUsageClientError.unauthorized
         },
-        grokProfileManager: (any GrokProfileManaging)? = nil
+        grokProfileManager: (any GrokProfileManaging)? = nil,
+        settings: any AppSettingsStoring = InMemoryAppSettingsStore()
     ) {
+        self.settings = settings
         self.loadGrokUsage = loadGrokUsage
         self.grokProfileManager = grokProfileManager
         self.loadClaude = loadClaude
@@ -495,19 +501,34 @@ actor ProductionAppService: CodexProfileActionHandling, ClaudeProfileActionHandl
     }
 
     func refresh() async -> AppUsageSnapshot {
-        await bootstrapCurrentProfileIfNeeded()
-        await bootstrapClaudeProfileIfNeeded()
-        await bootstrapGrokProfileIfNeeded()
-        // Capture whatever Claude Code refreshed on its own before reading any stored token.
-        await claudeProfileManager?.syncActiveProfile()
-        await grokProfileManager?.syncActiveProfile()
-        let claudeProfiles = await listClaudeProfiles()
-        let grokProfiles = await listGrokProfiles()
+        let enabled = settings.current.providers
+        if enabled.isEnabled(.codex) { await bootstrapCurrentProfileIfNeeded() }
+        if enabled.isEnabled(.claude) {
+            await bootstrapClaudeProfileIfNeeded()
+            // Capture whatever Claude Code refreshed on its own before reading any stored token.
+            await claudeProfileManager?.syncActiveProfile()
+        }
+        if enabled.isEnabled(.grok) {
+            await bootstrapGrokProfileIfNeeded()
+            await grokProfileManager?.syncActiveProfile()
+        }
+        let claudeProfiles = enabled.isEnabled(.claude) ? await listClaudeProfiles() : []
+        let grokProfiles = enabled.isEnabled(.grok) ? await listGrokProfiles() : []
         async let grokResult = refreshGrokProfiles(grokProfiles)
-        async let claudeResult = refreshLiveClaude(skip: !claudeProfiles.isEmpty)
+        async let claudeResult = refreshLiveClaude(
+            skip: !claudeProfiles.isEmpty || !enabled.isEnabled(.claude)
+        )
         async let claudeProfileResult = refreshClaudeProfiles(claudeProfiles)
-        async let openRouterResult = Self.loadOpenRouterUsage(loadOpenRouter)
-        let profiles = (try? await profileManager.listProfiles()) ?? []
+        let openRouterLoader: @Sendable () async throws -> OpenRouterUsageSnapshot =
+            enabled.isEnabled(.openRouter)
+                ? loadOpenRouter
+                : { @Sendable () async throws -> OpenRouterUsageSnapshot in
+                    throw OpenRouterUsageClientError.keyUnavailable
+                }
+        async let openRouterResult = Self.loadOpenRouterUsage(openRouterLoader)
+        let profiles = enabled.isEnabled(.codex)
+            ? (try? await profileManager.listProfiles()) ?? []
+            : []
         async let codexResult = refreshCodexProfiles(profiles)
         let (loadedClaude, claudeUsages, loadedOpenRouter, codex, grokUsages) = await (
             claudeResult,
@@ -981,6 +1002,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private let model: AppViewModel
     private let loginAttemptController: CodexLoginAttemptController?
     private let mobileAccess: MobileAccessController?
+    private let settingsWindow: SettingsWindowController
     private let removeStatusItem: @MainActor (NSStatusItem) -> Void
     private var cancellables: Set<AnyCancellable> = []
     private var started = false
@@ -999,8 +1021,13 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         self.loginAttemptController = loginAttemptController
         self.mobileAccess = mobileAccess
         self.removeStatusItem = removeStatusItem
+        settingsWindow = SettingsWindowController(model: model)
         statusView = StatusItemView(presentation: model.statusItemPresentation)
         super.init()
+        model.openSettingsHandler = { [weak self] in
+            self?.closePopover()
+            self?.settingsWindow.show()
+        }
 
         statusItem.button?.setAccessibilityIdentifier("token-usage-status-button")
         statusItem.button?.setAccessibilityLabel("Token Usage status")
@@ -1059,6 +1086,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 attemptController: loginAttemptController
             )
         )
+        let settingsStore = UserDefaultsAppSettingsStore()
         let grokClient = GrokUsageClient()
         let grokProfileManager = GrokProfileManager(
             credentialStore: KeychainCredentialStore(service: "local.tokenusage.grok-profiles"),
@@ -1082,7 +1110,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             profileManager: profileManager,
             claudeProfileManager: claudeProfileManager,
             grokClient: grokClient,
-            grokProfileManager: grokProfileManager
+            grokProfileManager: grokProfileManager,
+            settings: settingsStore
         )
         let coordinator = AppRefreshCoordinator(
             coordinator: RefreshCoordinator(
@@ -1096,6 +1125,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             profileActions: service,
             claudeProfileActions: service,
             grokProfileActions: service,
+            settingsStore: settingsStore,
             loginAttemptState: {
                 let presentation = loginAttemptController.presentation
                 return CodexLoginAttemptState(
@@ -1195,6 +1225,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         guard started else { return }
         started = false
         mobileAccess?.stop()
+        settingsWindow.close()
         closePopover()
         cancellables.removeAll()
         await model.stop()

@@ -94,10 +94,20 @@ public struct UsagePopoverView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: PopoverDesignSystem.Spacing.small) {
             PopoverHeader(model: model)
-            ClaudeQuotaSection(model: model)
-            CodexQuotaSection(model: model)
-            GrokQuotaSection(model: model)
-            OpenRouterQuotaSection(model: model)
+            ForEach(model.visibleProviders) { provider in
+                switch provider {
+                case .claude: ClaudeQuotaSection(model: model)
+                case .codex: CodexQuotaSection(model: model)
+                case .grok: GrokQuotaSection(model: model)
+                case .openRouter: OpenRouterQuotaSection(model: model)
+                }
+            }
+            if model.visibleProviders.isEmpty {
+                Text("켜진 프로바이더가 없습니다. 설정에서 하나 이상 켜 주세요.")
+                    .font(PopoverDesignSystem.Typography.detail)
+                    .foregroundStyle(PopoverDesignSystem.Palette.secondary)
+                    .accessibilityIdentifier("no-providers")
+            }
             RefreshStatus(model: model)
             Divider()
             PopoverActions(model: model)
@@ -1373,6 +1383,14 @@ private struct PopoverActions: View {
             }
 
             Spacer(minLength: 0)
+
+            Button {
+                model.openSettings()
+            } label: {
+                Label("설정", systemImage: "gearshape")
+            }
+            .accessibilityLabel("Token Usage 설정 열기")
+            .accessibilityIdentifier("open-settings")
 
             Button {
                 model.quit()
