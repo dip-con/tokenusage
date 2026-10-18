@@ -67,15 +67,6 @@ if [[ -z "$SIGN_IDENTITY" && -n "$INSTALLED_TEAM" ]]; then
         | sed -n "s/.*\"\(Developer ID Application: .* ($INSTALLED_TEAM)\)\"\$/\1/p" | head -n 1)"
 fi
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
-# Without a team, prefer the local identity over ad hoc: an ad hoc build's Keychain trust is its
-# cdhash, so every reinstall would ask for the login password once per saved account again.
-LOCAL_SIGN_IDENTITY=""
-if [[ "$SIGN_IDENTITY" == "-" && -z "$INSTALLED_TEAM" ]]; then
-    LOCAL_NAME="${TOKEN_USAGE_LOCAL_SIGN_IDENTITY:-tokenusage-local-codesign}"
-    if /usr/bin/security find-identity -p codesigning 2>/dev/null | grep -qF "\"$LOCAL_NAME\""; then
-        LOCAL_SIGN_IDENTITY="$LOCAL_NAME"
-    fi
-fi
 if [[ -n "$INSTALLED_TEAM" && "$SIGN_IDENTITY" == "-" && "${TOKEN_USAGE_ALLOW_SIGNING_CHANGE:-}" != 1 ]]; then
     fail "the installed app is signed by team $INSTALLED_TEAM but no matching Developer ID Application identity is available; an ad hoc build would cut saved accounts off from their Keychain items. Set TOKEN_USAGE_SIGN_IDENTITY, or TOKEN_USAGE_ALLOW_SIGNING_CHANGE=1 to accept that"
 fi
@@ -85,7 +76,6 @@ mkdir -p "$INSTALL_DIR" "$ROOT_DIR/build"
 STAGING_DIR="$(mktemp -d "$ROOT_DIR/build/install-staging.XXXXXX")"
 STAGED_APP="$STAGING_DIR/Token Usage.app"
 TOKEN_USAGE_APP_DIR="$STAGED_APP" TOKEN_USAGE_SIGN_IDENTITY="$SIGN_IDENTITY" \
-    TOKEN_USAGE_LOCAL_SIGN_IDENTITY="$LOCAL_SIGN_IDENTITY" \
     "$ROOT_DIR/scripts/package-app.sh"
 
 NEW_TEAM="$(team_of "$STAGED_APP")"
@@ -116,4 +106,4 @@ if [[ "$WAS_RUNNING" == 1 && "${TOKEN_USAGE_NO_LAUNCH:-}" != 1 ]]; then
 fi
 
 printf 'install-app: installed and registered %s (team %s)\n' \
-    "$(redact_path "$APP_PATH")" "${NEW_TEAM:-${LOCAL_SIGN_IDENTITY:-ad hoc}}"
+    "$(redact_path "$APP_PATH")" "${NEW_TEAM:-ad hoc}"
