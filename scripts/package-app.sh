@@ -109,7 +109,19 @@ cp -R "$RESOURCE_BUNDLE_PATH" "$APP_DIR/Contents/Resources/$RESOURCE_BUNDLE_NAME
 LS_UI_ELEMENT="$(/usr/bin/plutil -extract LSUIElement raw -o - "$APP_DIR/Contents/Info.plist")"
 [[ "$LS_UI_ELEMENT" == 1 || "$LS_UI_ELEMENT" == true ]] || fail "bundle Info.plist must set LSUIElement=true"
 
-if [[ "$SIGN_IDENTITY" == "-" ]]; then
+LOCAL_SIGN_IDENTITY="${TOKEN_USAGE_LOCAL_SIGN_IDENTITY:-}"
+if [[ "$SIGN_IDENTITY" == "-" && -n "$LOCAL_SIGN_IDENTITY" ]]; then
+    # A self-signed local identity (scripts/create-local-signing-identity.sh) is not trusted for
+    # distribution, but it gives every build the same designated requirement for the Keychain.
+    /usr/bin/security find-identity -p codesigning 2>/dev/null | grep -qF "\"$LOCAL_SIGN_IDENTITY\"" \
+        || fail "local signing identity $LOCAL_SIGN_IDENTITY is not in the keychain"
+    /usr/bin/codesign --force --sign "$LOCAL_SIGN_IDENTITY" --timestamp=none "$APP_DIR" >/dev/null \
+        || fail "local signing failed"
+    REQUIREMENT="$(/usr/bin/codesign -d -r- "$APP_DIR" 2>&1 || true)"
+    [[ "$REQUIREMENT" == *'certificate leaf = H"'* ]] \
+        || fail "local signing did not produce a certificate-based designated requirement"
+    SIGNING_DESCRIPTION="locally signed ($LOCAL_SIGN_IDENTITY); NOT publicly notarized"
+elif [[ "$SIGN_IDENTITY" == "-" ]]; then
     /usr/bin/codesign --force --sign - --timestamp=none "$APP_DIR" >/dev/null
     SIGNING_DESCRIPTION="ad-hoc signed; NOT publicly notarized"
 else
