@@ -32,9 +32,9 @@ public protocol ClaudeOAuthRefreshing: Sendable {
 
 /// Renews a stored account's access token with its refresh token.
 ///
-/// Only accounts that are *not* the one Claude Code is currently signed in as may be refreshed
-/// here. Claude Code renews its own token, and a rotated refresh token that only this app knows
-/// about would sign the running CLI out.
+/// The account Claude Code is signed in as may be refreshed only while no Claude Code process
+/// runs (see `ClaudeProfileManager.accessToken`): a rotated refresh token that only this app knows
+/// about would sign a running CLI out.
 public struct ClaudeOAuthRefresher: ClaudeOAuthRefreshing, Sendable {
     public static let endpoint = URL(string: "https://platform.claude.com/v1/oauth/token")!
     /// Claude Code's public OAuth client identifier; the token endpoint rejects any other.

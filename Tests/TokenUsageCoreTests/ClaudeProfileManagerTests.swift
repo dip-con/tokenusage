@@ -92,6 +92,49 @@ final class ClaudeProfileManagerTests: XCTestCase {
         XCTAssertNotNil(root["mcpOAuth"])
     }
 
+    func testExpiredActiveAccountIsRenewedAndWrittenBackOnlyWhileClaudeCodeIsNotRunning() async throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let fixture = Fixture(liveAccessToken: "personal-token")
+        fixture.refresher = FakeClaudeOAuthRefresher(
+            replacement: ClaudeOAuthToken(
+                accessToken: "personal-renewed",
+                refreshToken: "personal-rotated",
+                expiresAt: now.addingTimeInterval(28_800)
+            )
+        )
+        let saved = try await fixture.manager().saveCurrent(named: "personal")
+        try fixture.liveCredential.replaceEnvelope(
+            with: ClaudeCredentialFixture.envelope(
+                accessToken: "personal-token",
+                expiresAtMilliseconds: 1_699_999_000_000
+            ),
+            ifCurrentMatches: fixture.liveCredential.current
+        )
+
+        let running = fixture.manager(now: { now }, claudeCodeRunning: true)
+        await running.syncActiveProfile()
+        do {
+            _ = try await running.accessToken(for: saved.id)
+            XCTFail("A running Claude Code owns its token")
+        } catch {
+            XCTAssertEqual(error as? ClaudeProfileManagerError, .activeCredentialExpired)
+        }
+        XCTAssertEqual(fixture.refresher.callCount, 0)
+
+        let idle = fixture.manager(now: { now }, claudeCodeRunning: false)
+        let token = try await idle.accessToken(for: saved.id)
+
+        XCTAssertEqual(token, "personal-renewed")
+        let live = try XCTUnwrap(fixture.liveCredential.current)
+        let liveToken = try ClaudeCredentialEnvelope.token(
+            in: ClaudeCredentialEnvelope.oauthSection(from: live)
+        )
+        XCTAssertEqual(liveToken.accessToken, "personal-renewed", "Claude Code must start from it")
+        XCTAssertEqual(liveToken.refreshToken, "personal-rotated")
+        let liveRoot = try XCTUnwrap(JSONSerialization.jsonObject(with: live) as? [String: Any])
+        XCTAssertNotNil(liveRoot["mcpOAuth"], "the MCP tokens must survive the write-back")
+    }
+
     func testSaveCurrentRejectsExpiredCredentialsBeforeInvokingTheCLI() async throws {
         let fixture = Fixture(
             liveAccessToken: "expired-token",
@@ -628,7 +671,8 @@ private final class Fixture {
 
     func manager(
         withLoginRunner: Bool = true,
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = Date.init,
+        claudeCodeRunning: Bool = true
     ) -> ClaudeProfileManager {
         ClaudeProfileManager(
             credentialStore: credentials,
@@ -641,7 +685,8 @@ private final class Fixture {
             isolatedCredentials: isolatedCredentials,
             temporaryDirectory: temporaryDirectory,
             profileID: { [issuedIDs] in "profile-\(issuedIDs.next())" },
-            now: now
+            now: now,
+            isClaudeCodeRunning: { claudeCodeRunning }
         )
     }
 

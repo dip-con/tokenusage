@@ -1084,7 +1084,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             loginRunner: SystemClaudeLoginRunner(
                 environment: environment,
                 attemptController: loginAttemptController
-            )
+            ),
+            isClaudeCodeRunning: { ClaudeCodeProcessProbe.isRunning() }
         )
         let settingsStore = UserDefaultsAppSettingsStore()
         let grokClient = GrokUsageClient()

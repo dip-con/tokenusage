@@ -78,6 +78,7 @@ public actor ClaudeProfileManager {
     private let temporaryDirectory: URL
     private let profileID: @Sendable () -> String
     private let now: @Sendable () -> Date
+    private let isClaudeCodeRunning: @Sendable () -> Bool
     /// Renewed credentials the Keychain refused to take. The renewal already spent the old
     /// refresh token, so dropping the new one would sign the account out on its next renewal;
     /// it is served from here and written again on every later read until the Keychain accepts it.
@@ -95,8 +96,10 @@ public actor ClaudeProfileManager {
             SecurityCLIIsolatedClaudeCredentials(),
         temporaryDirectory: URL = FileManager.default.temporaryDirectory,
         profileID: @escaping @Sendable () -> String = { UUID().uuidString },
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = Date.init,
+        isClaudeCodeRunning: @escaping @Sendable () -> Bool = { true }
     ) {
+        self.isClaudeCodeRunning = isClaudeCodeRunning
         self.credentialStore = credentialStore
         self.preferences = preferences
         self.liveCredential = liveCredential
@@ -327,8 +330,10 @@ public actor ClaudeProfileManager {
 
     /// An access token usable against the usage API.
     ///
-    /// Only inactive accounts are renewed here: Claude Code owns the token of the account it is
-    /// signed in as, and a refresh token rotated behind its back would sign it out.
+    /// Inactive accounts are renewed here whenever they expire. The account Claude Code is signed
+    /// in as is renewed only while no Claude Code process runs - a running one holds its refresh
+    /// token in memory and would be signed out by a rotation - and the renewed token is written
+    /// back into Claude Code's Keychain item so its next start continues from it.
     public func accessToken(for id: String) async throws -> String {
         guard let stored = try storedCredential(id) else {
             throw ClaudeProfileManagerError.credentialMissing
@@ -341,10 +346,8 @@ public actor ClaudeProfileManager {
         }
 
         if id == preferences.activeProfileID {
-            guard !token.isExpired(at: now(), leeway: 0) else {
-                throw ClaudeProfileManagerError.activeCredentialExpired
-            }
-            return token.accessToken
+            guard token.isExpired(at: now(), leeway: 0) else { return token.accessToken }
+            return try await renewIdleActiveAccount(id: id, stored: stored, token: token)
         }
         // A token another saved account also holds was filed here by mistake: it would report the
         // other account's usage, and renewing it would rotate that account's refresh token and
@@ -373,6 +376,44 @@ public actor ClaudeProfileManager {
             } catch {
                 unsavedCredentials[id] = updated
             }
+        }
+        return refreshed.accessToken
+    }
+
+    private func renewIdleActiveAccount(
+        id: String,
+        stored: Data,
+        token: ClaudeOAuthToken
+    ) async throws -> String {
+        guard !isClaudeCodeRunning(),
+              let original = try? liveCredential.readEnvelope(),
+              // Only the very credential Claude Code holds; anything else is not ours to rotate.
+              (try? ClaudeCredentialEnvelope.oauthSection(from: original)) == stored else {
+            throw ClaudeProfileManagerError.activeCredentialExpired
+        }
+        let refreshed: ClaudeOAuthToken
+        do {
+            refreshed = try await refresher.refresh(token)
+        } catch ClaudeOAuthRefreshError.rejected {
+            throw ClaudeProfileManagerError.signedOut
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw ClaudeProfileManagerError.activeCredentialExpired
+        }
+        guard let updated = try? ClaudeCredentialEnvelope.applying(refreshed, to: stored) else {
+            return refreshed.accessToken
+        }
+        if let merged = try? ClaudeCredentialEnvelope.merging(oauthSection: updated, into: original) {
+            // Losing the race means Claude Code just wrote its own newer session; the next sync
+            // captures it.
+            try? liveCredential.replaceEnvelope(with: merged, ifCurrentMatches: original)
+        }
+        do {
+            try credentialStore.storeCredential(updated, named: id)
+            unsavedCredentials[id] = nil
+        } catch {
+            unsavedCredentials[id] = updated
         }
         return refreshed.accessToken
     }
