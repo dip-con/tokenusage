@@ -1054,7 +1054,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         let codexDependencies = ProductionCodexDependencies(environment: environment)
         let codexClient = codexDependencies.makeCodexClient()
         let openRouterClient = OpenRouterUsageClient(environment: environment)
-        let profileStore = KeychainCredentialStore(service: "local.tokenusage.codex-profiles")
+        let profileStore = KeychainCredentialStore.appOwned(service: "local.tokenusage.codex-profiles")
         let loginAttemptController = CodexLoginAttemptController()
         let loginRunner = codexDependencies.makeLoginRunner(
             attemptController: loginAttemptController
@@ -1071,7 +1071,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             applicationSupportRoot: codexDependencies.applicationSupportDirectory
         )
         let claudeProfileManager = ClaudeProfileManager(
-            credentialStore: KeychainCredentialStore(service: "local.tokenusage.claude-profiles"),
+            credentialStore: KeychainCredentialStore.appOwned(service: "local.tokenusage.claude-profiles"),
             preferences: ClaudeProfilePreferences(),
             liveCredential: SecurityCLIClaudeLiveCredentialOperator(),
             configOperator: FileClaudeConfigOperator(
@@ -1090,7 +1090,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         let settingsStore = UserDefaultsAppSettingsStore()
         let grokClient = GrokUsageClient()
         let grokProfileManager = GrokProfileManager(
-            credentialStore: KeychainCredentialStore(service: "local.tokenusage.grok-profiles"),
+            credentialStore: KeychainCredentialStore.appOwned(service: "local.tokenusage.grok-profiles"),
             preferences: GrokProfilePreferences(),
             liveAuthFile: AtomicAuthFileOperator(
                 authFileURL: Self.grokHome(environment: environment)
