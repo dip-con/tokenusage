@@ -4,7 +4,7 @@ import XCTest
 
 final class ClaudeConfigOperatorTests: XCTestCase {
     func testApplyingAnAccountKeepsEveryUnrelatedSettingIntact() throws {
-        let file = MemoryAuthFile(json: [
+        let file = ClaudeConfigMemoryAuthFile(json: [
             "oauthAccount": ["emailAddress": "personal@example.com"],
             "projects": ["/Users/me/app": ["allowedTools": ["Bash"]]],
             "numStartups": 1_720,
@@ -21,7 +21,7 @@ final class ClaudeConfigOperatorTests: XCTestCase {
     }
 
     func testApplyingAnAccountDropsCachesBelongingToThePreviousAccount() throws {
-        let file = MemoryAuthFile(json: [
+        let file = ClaudeConfigMemoryAuthFile(json: [
             "oauthAccount": ["emailAddress": "personal@example.com"],
             "modelAccessCache": ["opus": true],
             "hasAvailableSubscription": true,
@@ -39,12 +39,12 @@ final class ClaudeConfigOperatorTests: XCTestCase {
 
     func testReadingReturnsTheAccountBlockAndNilWhenThereIsNone() throws {
         let withAccount = FileClaudeConfigOperator(
-            fileOperator: MemoryAuthFile(json: [
+            fileOperator: ClaudeConfigMemoryAuthFile(json: [
                 "oauthAccount": ["emailAddress": "personal@example.com"],
             ])
         )
         let withoutAccount = FileClaudeConfigOperator(
-            fileOperator: MemoryAuthFile(json: ["numStartups": 3])
+            fileOperator: ClaudeConfigMemoryAuthFile(json: ["numStartups": 3])
         )
 
         XCTAssertEqual(
@@ -55,7 +55,7 @@ final class ClaudeConfigOperatorTests: XCTestCase {
     }
 
     func testAMissingConfigFileIsLeftForClaudeCodeToRecreate() throws {
-        let file = MemoryAuthFile(data: nil)
+        let file = ClaudeConfigMemoryAuthFile(data: nil)
         let configOperator = FileClaudeConfigOperator(fileOperator: file)
 
         try configOperator.applyAccountJSON(#"{"emailAddress":"work@example.com"}"#)
@@ -64,7 +64,7 @@ final class ClaudeConfigOperatorTests: XCTestCase {
     }
 
     func testAFileThatKeepsChangingUnderneathReportsAConflictInsteadOfClobbering() throws {
-        let file = MemoryAuthFile(json: ["oauthAccount": ["emailAddress": "a@example.com"]])
+        let file = ClaudeConfigMemoryAuthFile(json: ["oauthAccount": ["emailAddress": "a@example.com"]])
         file.rejectEveryReplacement = true
         let configOperator = FileClaudeConfigOperator(fileOperator: file)
 
@@ -79,7 +79,7 @@ final class ClaudeConfigOperatorTests: XCTestCase {
     }
 }
 
-private final class MemoryAuthFile: AuthFileOperating, @unchecked Sendable {
+private final class ClaudeConfigMemoryAuthFile: AuthFileOperating, @unchecked Sendable {
     private let lock = NSLock()
     private var data: Data?
     var rejectEveryReplacement = false
