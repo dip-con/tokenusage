@@ -287,6 +287,55 @@ final class ClaudeUsageClientTests: XCTestCase {
         XCTAssertEqual(refreshed.capturedAt, clock.now)
     }
 
+    func testForgetCachedUsageForcesAFreshRequest() async throws {
+        let clock = ClaudeUsageTestClock()
+        let session = FixtureURLSession.responding(
+            statusCode: 200,
+            body: jsonData(#"{"five_hour":{"utilization":16,"resets_at":null}}"#)
+        )
+        let client = ClaudeUsageClient(
+            credentialStore: StubCredentialStore(credential: credentialData(token: "account-a")),
+            session: session,
+            capturedAt: { clock.now }
+        )
+        _ = try await client.usage()
+        _ = try await client.usage()
+        XCTAssertEqual(session.requests.count, 1)
+
+        await client.forgetCachedUsage(accessToken: "account-a")
+        _ = try await client.usage()
+
+        XCTAssertEqual(session.requests.count, 2)
+    }
+
+    func testForgetCachedUsageKeepsRateLimitBackoff() async {
+        let clock = ClaudeUsageTestClock()
+        let session = FixtureURLSession.responding(
+            statusCode: 429,
+            body: Data(),
+            headers: ["Retry-After": "3105"]
+        )
+        let client = ClaudeUsageClient(
+            credentialStore: StubCredentialStore(credential: credentialData(token: "account-a")),
+            session: session,
+            capturedAt: { clock.now }
+        )
+        await assertUsageFails(client)
+
+        await client.forgetCachedUsage(accessToken: "account-a")
+
+        do {
+            _ = try await client.usage()
+            XCTFail("Expected rate-limited usage to keep failing")
+        } catch {
+            XCTAssertEqual(
+                error as? ClaudeUsageClientError,
+                .rateLimited(retryAt: clock.now.addingTimeInterval(3105))
+            )
+        }
+        XCTAssertEqual(session.requests.count, 1)
+    }
+
     private func assertUsageFails(_ client: ClaudeUsageClient) async {
         do {
             _ = try await client.usage()

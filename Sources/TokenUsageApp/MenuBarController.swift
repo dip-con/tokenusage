@@ -380,6 +380,7 @@ protocol ClaudeProfileManaging: Sendable {
     func activeProfileID() async -> String?
     func saveCurrent(named name: String) async throws -> ClaudeProfileMetadata
     func addAccount(named name: String) async throws -> ClaudeProfileMetadata?
+    func reloginAccount(id: String) async throws -> ClaudeProfileMetadata?
     func activateProfile(id: String) async throws
     func removeProfile(id: String) async throws
     func accessToken(for id: String) async throws -> String
@@ -425,6 +426,7 @@ actor ProductionAppService: CodexProfileActionHandling, ClaudeProfileActionHandl
 {
     private let loadClaude: @Sendable () async throws -> UsageSnapshot
     private let loadClaudeUsage: @Sendable (String) async throws -> UsageSnapshot
+    private let forgetClaudeUsage: @Sendable (String) async -> Void
     private let loadCodex: @Sendable (URL) async throws -> UsageSnapshot
     private let loadOpenRouter: @Sendable () async throws -> OpenRouterUsageSnapshot
     private let validateCodexAccount: @Sendable (URL) async throws -> CodexAccount
@@ -461,6 +463,7 @@ actor ProductionAppService: CodexProfileActionHandling, ClaudeProfileActionHandl
         self.grokProfileManager = grokProfileManager
         loadClaude = { try await claudeClient.usage() }
         loadClaudeUsage = { try await claudeClient.usage(accessToken: $0) }
+        forgetClaudeUsage = { await claudeClient.forgetCachedUsage(accessToken: $0) }
         loadCodex = { try await codexClient.usage(codexHome: $0) }
         loadOpenRouter = { try await openRouterClient.usage() }
         validateCodexAccount = { try await codexClient.validate(codexHome: $0) }
@@ -481,6 +484,7 @@ actor ProductionAppService: CodexProfileActionHandling, ClaudeProfileActionHandl
         loadClaudeUsage: @escaping @Sendable (String) async throws -> UsageSnapshot = { _ in
             throw ClaudeUsageClientError.credentialUnavailable
         },
+        forgetClaudeUsage: @escaping @Sendable (String) async -> Void = { _ in },
         claudeProfileManager: (any ClaudeProfileManaging)? = nil,
         loadGrokUsage: @escaping @Sendable (String) async throws -> UsageSnapshot = { _ in
             throw GrokUsageClientError.unauthorized
@@ -493,6 +497,7 @@ actor ProductionAppService: CodexProfileActionHandling, ClaudeProfileActionHandl
         self.grokProfileManager = grokProfileManager
         self.loadClaude = loadClaude
         self.loadClaudeUsage = loadClaudeUsage
+        self.forgetClaudeUsage = forgetClaudeUsage
         self.loadCodex = loadCodex
         self.loadOpenRouter = loadOpenRouter
         self.validateCodexAccount = validateCodexAccount
@@ -719,6 +724,18 @@ actor ProductionAppService: CodexProfileActionHandling, ClaudeProfileActionHandl
 
     func addClaudeAccount(named name: String) async throws -> AppUsageSnapshot {
         _ = try await requiredClaudeProfileManager().addAccount(named: name)
+        return await refresh()
+    }
+
+    func reloginClaudeAccount(id: String) async throws -> AppUsageSnapshot {
+        _ = try await requiredClaudeProfileManager().reloginAccount(id: id)
+        return await refresh()
+    }
+
+    func refreshClaudeProfile(id: String) async throws -> AppUsageSnapshot {
+        if let token = try? await requiredClaudeProfileManager().accessToken(for: id) {
+            await forgetClaudeUsage(token)
+        }
         return await refresh()
     }
 
@@ -1255,7 +1272,11 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         popover.contentViewController = hostingController
         self.popover = popover
         popoverHostingController = hostingController
+        // An inactive accessory app's popover never becomes key, so its text fields take no typing
+        // - which is how the app is left once a sign-in hands focus to the browser.
+        NSApplication.shared.activate(ignoringOtherApps: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        hostingController.view.window?.makeKey()
         hostingController.view.layoutSubtreeIfNeeded()
         NSAccessibility.post(element: hostingController.view, notification: .created)
         startWatchingForOutsideClicks()

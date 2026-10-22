@@ -155,6 +155,77 @@ public actor ClaudeProfileManager {
     /// being activated, exactly like adding a Codex account.
     public func addAccount(named requestedName: String) async throws -> ClaudeProfileMetadata? {
         let name = try validatedName(requestedName)
+        guard let signIn = try await signInIsolated() else { return nil }
+        return try persist(
+            name: name,
+            section: signIn.section,
+            account: signIn.account,
+            configAccountJSON: signIn.configAccountJSON,
+            makeActive: false
+        )
+    }
+
+    /// Signs a saved account in again and replaces its credential, keeping its name.
+    ///
+    /// The sign-in runs in a throwaway directory exactly like `addAccount`, and must come back as
+    /// the very account the profile names; anything else changes nothing. For the active profile
+    /// the new credential is also installed into Claude Code's own Keychain item: `syncActiveProfile`
+    /// copies that live item over the active profile's stored credential on every refresh, so a
+    /// dead live login would otherwise overwrite the fresh one moments later.
+    public func reloginAccount(id: String) async throws -> ClaudeProfileMetadata? {
+        guard let profile = try listProfiles().first(where: { $0.id == id }) else {
+            throw ClaudeProfileManagerError.profileNotFound
+        }
+        guard let signIn = try await signInIsolated() else { return nil }
+        let identity = Self.identity(inConfigAccountJSON: signIn.configAccountJSON)
+        guard Self.isSameAccount(
+            profile,
+            accountUUID: identity.accountUUID,
+            email: signIn.account.email ?? identity.email
+        ) else {
+            throw ClaudeProfileManagerError.accountIdentityMismatch
+        }
+        let configAccountJSON = signIn.configAccountJSON ?? profile.configAccountJSON
+
+        if id == preferences.activeProfileID {
+            let original = try liveEnvelope()
+            let updated: Data
+            do {
+                updated = try ClaudeCredentialEnvelope.merging(
+                    oauthSection: signIn.section,
+                    into: original
+                )
+            } catch {
+                throw ClaudeProfileManagerError.credentialMissing
+            }
+            do {
+                try liveCredential.replaceEnvelope(with: updated, ifCurrentMatches: original)
+            } catch ClaudeLiveCredentialError.conflict {
+                throw ClaudeProfileManagerError.concurrentModification
+            } catch {
+                throw ClaudeProfileManagerError.activationFailed
+            }
+            try? configOperator.applyAccountJSON(configAccountJSON)
+        }
+
+        return try persist(
+            name: profile.name,
+            section: signIn.section,
+            account: signIn.account,
+            configAccountJSON: configAccountJSON,
+            makeActive: false
+        )
+    }
+
+    private struct IsolatedSignIn {
+        let section: Data
+        let account: ClaudeAccount
+        let configAccountJSON: String?
+    }
+
+    /// Runs `claude auth login` in a throwaway configuration directory and reads back what it
+    /// left there; `nil` when the user cancelled.
+    private func signInIsolated() async throws -> IsolatedSignIn? {
         guard let loginRunner else { throw ClaudeProfileManagerError.loginUnavailable }
 
         let configurationDirectory = try makeTemporaryConfigurationDirectory()
@@ -203,12 +274,10 @@ public actor ClaudeProfileManager {
         let configAccountJSON = try? FileClaudeConfigOperator(
             configFileURL: configurationDirectory.appendingPathComponent(".claude.json")
         ).readAccountJSON()
-        return try persist(
-            name: name,
+        return IsolatedSignIn(
             section: section,
             account: account,
-            configAccountJSON: configAccountJSON,
-            makeActive: false
+            configAccountJSON: configAccountJSON
         )
     }
 

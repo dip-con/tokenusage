@@ -469,6 +469,123 @@ final class ClaudeProfileManagerTests: XCTestCase {
         XCTAssertEqual(try ClaudeCredentialEnvelope.token(in: stored).accessToken, "work-token")
     }
 
+    func testReloginOfTheActiveAccountReplacesADeadLiveLoginAndTheStoredCredential() async throws {
+        let fixture = Fixture(liveAccessToken: "personal-token")
+        let manager = fixture.manager()
+        let personal = try await manager.saveCurrent(named: "personal")
+        // What Claude Code leaves behind after the refresh token was rejected.
+        try fixture.liveCredential.replaceEnvelope(
+            with: ClaudeCredentialFixture.envelope(
+                accessToken: "",
+                refreshToken: "",
+                expiresAtMilliseconds: 0
+            ),
+            ifCurrentMatches: fixture.liveCredential.current
+        )
+        fixture.plantLoginResult(
+            accessToken: "personal-new",
+            email: "personal@example.com",
+            accountUUID: "personal-uuid"
+        )
+
+        let relogged = try await manager.reloginAccount(id: personal.id)
+
+        XCTAssertEqual(relogged?.id, personal.id)
+        XCTAssertEqual(relogged?.name, "personal")
+        let stored = try XCTUnwrap(fixture.credentials.credential(named: personal.id))
+        XCTAssertEqual(try ClaudeCredentialEnvelope.token(in: stored).accessToken, "personal-new")
+        let live = try XCTUnwrap(fixture.liveCredential.current)
+        let liveToken = try ClaudeCredentialEnvelope.token(
+            in: ClaudeCredentialEnvelope.oauthSection(from: live)
+        )
+        XCTAssertEqual(liveToken.accessToken, "personal-new")
+        let liveRoot = try XCTUnwrap(JSONSerialization.jsonObject(with: live) as? [String: Any])
+        XCTAssertNotNil(liveRoot["mcpOAuth"], "the MCP tokens must survive a re-login")
+        XCTAssertEqual(fixture.refresher.callCount, 0)
+    }
+
+    func testReloginOfAnInactiveAccountLeavesTheLiveLoginAlone() async throws {
+        let fixture = Fixture(liveAccessToken: "personal-token")
+        let manager = fixture.manager()
+        let personal = try await manager.saveCurrent(named: "personal")
+        let work = try fixture.addStoredProfile(
+            name: "work",
+            accessToken: "work-token",
+            email: "work@example.com"
+        )
+        let liveBefore = fixture.liveCredential.current
+        fixture.plantLoginResult(
+            accessToken: "work-new",
+            email: "work@example.com",
+            accountUUID: "work-uuid"
+        )
+
+        let relogged = try await manager.reloginAccount(id: work.id)
+
+        XCTAssertEqual(relogged?.name, "work")
+        let stored = try XCTUnwrap(fixture.credentials.credential(named: work.id))
+        XCTAssertEqual(try ClaudeCredentialEnvelope.token(in: stored).accessToken, "work-new")
+        XCTAssertEqual(fixture.liveCredential.current, liveBefore)
+        let activeProfileID = await manager.activeProfileID()
+        XCTAssertEqual(activeProfileID, personal.id)
+    }
+
+    func testReloginAsAnotherAccountChangesNothing() async throws {
+        let fixture = Fixture(liveAccessToken: "personal-token")
+        let manager = fixture.manager()
+        let personal = try await manager.saveCurrent(named: "personal")
+        let work = try fixture.addStoredProfile(
+            name: "work",
+            accessToken: "work-token",
+            email: "work@example.com"
+        )
+        let personalBefore = try fixture.credentials.credential(named: personal.id)
+        let workBefore = try fixture.credentials.credential(named: work.id)
+        let liveBefore = fixture.liveCredential.current
+        let profilesBefore = try await manager.listProfiles()
+        fixture.plantLoginResult(
+            accessToken: "intruder-token",
+            email: "personal@example.com",
+            accountUUID: "personal-uuid"
+        )
+
+        do {
+            _ = try await manager.reloginAccount(id: work.id)
+            XCTFail("a sign-in as another account must not replace this one")
+        } catch let error as ClaudeProfileManagerError {
+            XCTAssertEqual(error, .accountIdentityMismatch)
+        }
+
+        XCTAssertEqual(try fixture.credentials.credential(named: work.id), workBefore)
+        XCTAssertEqual(try fixture.credentials.credential(named: personal.id), personalBefore)
+        XCTAssertEqual(fixture.liveCredential.current, liveBefore)
+        let profilesAfter = try await manager.listProfiles()
+        XCTAssertEqual(profilesAfter, profilesBefore)
+        let activeProfileID = await manager.activeProfileID()
+        XCTAssertEqual(activeProfileID, personal.id)
+    }
+
+    func testACancelledReloginChangesNothing() async throws {
+        let fixture = Fixture(liveAccessToken: "personal-token")
+        fixture.loginRunner = FakeClaudeLoginRunner(outcome: .cancelled)
+        let manager = fixture.manager()
+        let personal = try await manager.saveCurrent(named: "personal")
+        let storedBefore = try fixture.credentials.credential(named: personal.id)
+        let liveBefore = fixture.liveCredential.current
+        // Even with a credential left behind, a cancelled sign-in must not be used.
+        fixture.plantLoginResult(
+            accessToken: "personal-new",
+            email: "personal@example.com",
+            accountUUID: "personal-uuid"
+        )
+
+        let relogged = try await manager.reloginAccount(id: personal.id)
+
+        XCTAssertNil(relogged)
+        XCTAssertEqual(try fixture.credentials.credential(named: personal.id), storedBefore)
+        XCTAssertEqual(fixture.liveCredential.current, liveBefore)
+    }
+
     func testAddingAnAccountIsRefusedWhenNoSignInRunnerIsWired() async throws {
         let fixture = Fixture(liveAccessToken: "personal-token")
         let manager = fixture.manager(withLoginRunner: false)

@@ -156,6 +156,7 @@ private struct ProfileDeletionTarget: Equatable {
 
 private struct ClaudeQuotaSection: View {
     @ObservedObject var model: AppViewModel
+    @State private var editor: ClaudeProfileEditor?
 
     var body: some View {
         VStack(alignment: .leading, spacing: PopoverDesignSystem.Spacing.small) {
@@ -194,6 +195,20 @@ private struct ClaudeQuotaSection: View {
                                 Task { await model.selectClaudeProfile(id: row.profileID) }
                             }
                             .disabled(model.isPerformingProfileAction)
+                            .contextMenu {
+                                if let profile = model.claudeProfiles.first(where: {
+                                    $0.id == row.profileID
+                                }) {
+                                    Button("\(profile.name) 다시 로그인…") {
+                                        editor = .relogin(id: profile.id, name: profile.name)
+                                    }
+                                    .accessibilityIdentifier("relogin-claude-profile-\(profile.id)")
+                                    Button("\(profile.name) 새로고침") {
+                                        Task { await model.refreshClaudeProfile(id: profile.id) }
+                                    }
+                                    .accessibilityIdentifier("refresh-claude-profile-\(profile.id)")
+                                }
+                            }
                         }
                     }
                 }
@@ -208,7 +223,7 @@ private struct ClaudeQuotaSection: View {
                 .accessibilityIdentifier("claude-profile-quota-list")
             }
 
-            ClaudeProfileControls(model: model)
+            ClaudeProfileControls(model: model, editor: $editor)
         }
         .providerPanel(.claude)
     }
@@ -894,14 +909,17 @@ private struct RefreshStatus: View {
     }
 }
 
+private enum ClaudeProfileEditor: Equatable {
+    case saveCurrent
+    case newLogin
+    case relogin(id: String, name: String)
+}
+
 private struct ClaudeProfileControls: View {
-    private enum Editor {
-        case saveCurrent
-        case newLogin
-    }
+    private typealias Editor = ClaudeProfileEditor
 
     @ObservedObject var model: AppViewModel
-    @State private var editor: Editor?
+    @Binding var editor: ClaudeProfileEditor?
     @State private var deletionTarget: ProfileDeletionTarget?
 
     var body: some View {
@@ -924,6 +942,17 @@ private struct ClaudeProfileControls: View {
                     .accessibilityIdentifier("add-claude-account")
 
                     if !model.claudeProfiles.isEmpty {
+                        Divider()
+                        ForEach(model.claudeProfiles, id: \.id) { profile in
+                            Button("\(profile.name) 다시 로그인…") {
+                                editor = .relogin(id: profile.id, name: profile.name)
+                            }
+                            .accessibilityIdentifier("relogin-claude-profile-\(profile.id)")
+                            Button("\(profile.name) 새로고침") {
+                                Task { await model.refreshClaudeProfile(id: profile.id) }
+                            }
+                            .accessibilityIdentifier("refresh-claude-profile-\(profile.id)")
+                        }
                         Divider()
                         ForEach(model.claudeProfiles, id: \.id) { profile in
                             Button(role: .destructive) {
@@ -954,7 +983,7 @@ private struct ClaudeProfileControls: View {
                         .foregroundStyle(PopoverDesignSystem.Palette.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    if let status = model.codexLoginStatusText, editor == .newLogin {
+                    if let status = model.codexLoginStatusText, editor.runsSignIn {
                         Text(status)
                             .font(PopoverDesignSystem.Typography.detail)
                             .accessibilityIdentifier("claude-login-status")
@@ -970,38 +999,31 @@ private struct ClaudeProfileControls: View {
                         }
                     } else {
                         HStack(spacing: PopoverDesignSystem.Spacing.small) {
-                            TextField("계정 이름", text: $model.claudeProfileName)
-                                .textFieldStyle(.roundedBorder)
-                                .accessibilityLabel("Claude 계정 이름")
-                                .accessibilityIdentifier(
-                                    editor == .saveCurrent
-                                        ? "claude-profile-name"
-                                        : "new-claude-profile-name"
-                                )
+                            if let nameIdentifier = editor.nameFieldIdentifier {
+                                TextField("계정 이름", text: $model.claudeProfileName)
+                                    .textFieldStyle(.roundedBorder)
+                                    .accessibilityLabel("Claude 계정 이름")
+                                    .accessibilityIdentifier(nameIdentifier)
+                            }
 
                             Button("취소") { self.editor = nil }
-                                .accessibilityIdentifier(
-                                    editor == .saveCurrent
-                                        ? "cancel-save-current-claude-profile"
-                                        : "cancel-new-claude-login"
-                                )
+                                .accessibilityIdentifier(editor.cancelIdentifier)
 
                             Button(editor == .saveCurrent ? "저장" : "계속") {
                                 Task {
-                                    if editor == .saveCurrent {
+                                    switch editor {
+                                    case .saveCurrent:
                                         await model.saveCurrentClaudeProfile()
-                                    } else {
+                                    case .newLogin:
                                         await model.addClaudeAccount()
+                                    case let .relogin(id, _):
+                                        await model.reloginClaudeAccount(id: id)
                                     }
                                     self.editor = nil
                                 }
                             }
                             .keyboardShortcut(.defaultAction)
-                            .accessibilityIdentifier(
-                                editor == .saveCurrent
-                                    ? "confirm-save-current-claude-profile"
-                                    : "confirm-new-claude-login"
-                            )
+                            .accessibilityIdentifier(editor.confirmIdentifier)
                         }
                         .disabled(model.isPerformingProfileAction)
                     }
@@ -1034,6 +1056,41 @@ private struct ClaudeProfileControls: View {
             "지금 Claude Code 가 로그인된 계정을 이 이름으로 저장합니다."
         case .newLogin:
             "브라우저에서 다른 계정으로 로그인합니다. 지금 로그인된 계정은 유지됩니다."
+        case let .relogin(_, name):
+            "\(name) 계정으로 브라우저에서 다시 로그인합니다."
+        }
+    }
+}
+
+private extension ClaudeProfileEditor {
+    var runsSignIn: Bool {
+        switch self {
+        case .saveCurrent: false
+        case .newLogin, .relogin: true
+        }
+    }
+
+    var nameFieldIdentifier: String? {
+        switch self {
+        case .saveCurrent: "claude-profile-name"
+        case .newLogin: "new-claude-profile-name"
+        case .relogin: nil
+        }
+    }
+
+    var cancelIdentifier: String {
+        switch self {
+        case .saveCurrent: "cancel-save-current-claude-profile"
+        case .newLogin: "cancel-new-claude-login"
+        case .relogin: "cancel-relogin-claude-profile"
+        }
+    }
+
+    var confirmIdentifier: String {
+        switch self {
+        case .saveCurrent: "confirm-save-current-claude-profile"
+        case .newLogin: "confirm-new-claude-login"
+        case .relogin: "confirm-relogin-claude-profile"
         }
     }
 }

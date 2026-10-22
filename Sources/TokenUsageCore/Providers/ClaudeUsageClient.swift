@@ -181,6 +181,11 @@ public struct ClaudeUsageClient: UsageProviding, Sendable {
         await cache.store(.value(snapshot), for: accessToken)
         return snapshot
     }
+
+    /// Drops the cached snapshot for the token so the next read makes a fresh request.
+    public func forgetCachedUsage(accessToken: String) async {
+        await cache.forgetValue(for: accessToken)
+    }
 }
 
 private actor ClaudeUsageCache {
@@ -214,5 +219,12 @@ private actor ClaudeUsageCache {
 
     func store(_ entry: Entry, for accessToken: String) {
         entries[SHA256.hash(data: Data(accessToken.utf8))] = entry
+    }
+
+    func forgetValue(for accessToken: String) {
+        let key = SHA256.hash(data: Data(accessToken.utf8))
+        if case .value = entries[key] {
+            entries[key] = nil
+        }
     }
 }

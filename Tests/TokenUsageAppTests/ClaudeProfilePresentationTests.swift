@@ -343,6 +343,19 @@ final class ClaudeProfilePresentationTests: XCTestCase {
         XCTAssertEqual(actions.deletedIDs, ["claude-2"])
     }
 
+    func testReloginAndRefreshTargetTheGivenAccount() async {
+        let actions = MockClaudeActions(result: twoAccountSnapshot(activeID: "claude-1"))
+        let model = makeModel(actions: actions)
+        model.apply(.current(twoAccountSnapshot(activeID: "claude-1")))
+
+        await model.reloginClaudeAccount(id: "claude-2")
+        await model.refreshClaudeProfile(id: "claude-2")
+
+        XCTAssertEqual(actions.reloggedIDs, ["claude-2"])
+        XCTAssertEqual(actions.refreshedIDs, ["claude-2"])
+        XCTAssertTrue(actions.selectedIDs.isEmpty, "neither action switches the active account")
+    }
+
     // MARK: - Fixtures
 
     private func makeModel(actions: MockClaudeActions? = nil) -> AppViewModel {
@@ -413,6 +426,8 @@ private final class MockClaudeActions: ClaudeProfileActionHandling, @unchecked S
     private var saved: [String] = []
     private var deleted: [String] = []
     private var added: [String] = []
+    private var relogged: [String] = []
+    private var refreshed: [String] = []
 
     init(result: AppUsageSnapshot, error: (any Error)? = nil) {
         self.result = result
@@ -431,6 +446,14 @@ private final class MockClaudeActions: ClaudeProfileActionHandling, @unchecked S
         try record(name, into: \.added)
     }
 
+    func reloginClaudeAccount(id: String) async throws -> AppUsageSnapshot {
+        try record(id, into: \.relogged)
+    }
+
+    func refreshClaudeProfile(id: String) async throws -> AppUsageSnapshot {
+        try record(id, into: \.refreshed)
+    }
+
     func deleteClaudeProfile(id: String) async throws -> AppUsageSnapshot {
         try record(id, into: \.deleted)
     }
@@ -439,6 +462,8 @@ private final class MockClaudeActions: ClaudeProfileActionHandling, @unchecked S
     var savedNames: [String] { lock.withLock { saved } }
     var deletedIDs: [String] { lock.withLock { deleted } }
     var addedNames: [String] { lock.withLock { added } }
+    var reloggedIDs: [String] { lock.withLock { relogged } }
+    var refreshedIDs: [String] { lock.withLock { refreshed } }
 
     private func record(
         _ value: String,

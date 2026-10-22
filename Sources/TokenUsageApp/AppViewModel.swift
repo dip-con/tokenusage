@@ -145,6 +145,8 @@ public protocol ClaudeProfileActionHandling: Sendable {
     func selectClaudeProfile(id: String) async throws -> AppUsageSnapshot
     func saveCurrentClaudeProfile(named name: String) async throws -> AppUsageSnapshot
     func addClaudeAccount(named name: String) async throws -> AppUsageSnapshot
+    func reloginClaudeAccount(id: String) async throws -> AppUsageSnapshot
+    func refreshClaudeProfile(id: String) async throws -> AppUsageSnapshot
     func deleteClaudeProfile(id: String) async throws -> AppUsageSnapshot
 }
 
@@ -163,6 +165,14 @@ public struct UnavailableClaudeProfileActions: ClaudeProfileActionHandling {
 
     public func addClaudeAccount(named name: String) async throws -> AppUsageSnapshot {
         throw ClaudeProfileManagerError.loginUnavailable
+    }
+
+    public func reloginClaudeAccount(id: String) async throws -> AppUsageSnapshot {
+        throw ClaudeProfileManagerError.loginUnavailable
+    }
+
+    public func refreshClaudeProfile(id: String) async throws -> AppUsageSnapshot {
+        throw ClaudeProfileManagerError.storageFailed
     }
 
     public func deleteClaudeProfile(id: String) async throws -> AppUsageSnapshot {
@@ -642,6 +652,20 @@ public final class AppViewModel: ObservableObject {
         defer { stopLoginObservation() }
         await performProfileAction(failureMessage: "Claude 계정을 추가하지 못했습니다.") {
             try await self.claudeProfileActions.addClaudeAccount(named: name)
+        }
+    }
+
+    public func reloginClaudeAccount(id: String) async {
+        startLoginObservation()
+        defer { stopLoginObservation() }
+        await performProfileAction(failureMessage: "Claude 계정에 다시 로그인하지 못했습니다.") {
+            try await self.claudeProfileActions.reloginClaudeAccount(id: id)
+        }
+    }
+
+    public func refreshClaudeProfile(id: String) async {
+        await performProfileAction(failureMessage: "Claude 계정을 새로고침하지 못했습니다.") {
+            try await self.claudeProfileActions.refreshClaudeProfile(id: id)
         }
     }
 
